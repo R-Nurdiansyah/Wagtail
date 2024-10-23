@@ -21,7 +21,7 @@ def create_manifest(input, file_map, output):
             "direction": ["forward"]
         })
         manifest_file = os.path.join(output, input + "_manifest.csv")
-        df_manifest.write_csv(manifest_file, has_header=True)
+        df_manifest.write_csv(manifest_file, include_header=True)
         logging.info("Created manifest file for sample:", input)
     else:
         logging.warning(f"Accession {input} not found in the file map")
@@ -30,7 +30,7 @@ if __name__ == "__main__":
     # Setup parser argumen baris perintah
     parser = argparse.ArgumentParser()
     parser.add_argument('--input', help='input accession name', required=True)
-    parser.add_argument('--file_map', help='file map location, 2 column of tsv without header. column 1 accession, column 2 absolute path of the data', required=True)
+    parser.add_argument('--file-map', help='file map location, 2 column of tsv without header. column 1 accession, column 2 absolute path of the data', required=True)
     parser.add_argument('--output', help='output directory', required=True)
     args = parser.parse_args()
 
