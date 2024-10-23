@@ -1,2 +1,2 @@
-# 16s_big_data
+# Wagtail development
 Repo for 16S_Project
