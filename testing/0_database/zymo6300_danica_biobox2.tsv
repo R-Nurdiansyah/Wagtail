@@ -1,0 +1,39 @@
+# Taxonomic Profiling Output
+@SampleID:SAMPLEID
+@Version:0.9.1
+@Ranks:kingdom|phylum|class|order|family|genus|species
+@TaxonomyID:ncbi-taxonomy_DATE
+@@TAXID	RANK	TAXPATH	TAXPATHSN	PERCENTAGE
+1	kingdom	1	d__Bacteria	100.0
+2	phylum	1|2	d__Bacteria|p__Proteobacteria	24.699999999999996
+3	phylum	1|3	d__Bacteria|p__Firmicutes	75.29999999999998
+4	class	1|2|4	d__Bacteria|p__Proteobacteria|c__Gammaproteobacteria	24.699999999999996
+5	class	1|3|5	d__Bacteria|p__Firmicutes|c__Bacilli	75.29999999999998
+6	order	1|2|4|6	d__Bacteria|p__Proteobacteria|c__Gammaproteobacteria|o__Pseudomonadales	4.199999999999999
+7	order	1|2|4|7	d__Bacteria|p__Proteobacteria|c__Gammaproteobacteria|o__Enterobacterales	20.5
+8	order	1|3|5|8	d__Bacteria|p__Firmicutes|c__Bacilli|o__Lactobacillales	42.4
+9	order	1|3|5|9	d__Bacteria|p__Firmicutes|c__Bacilli|o__Staphylococcales	15.5
+10	order	1|3|5|10	d__Bacteria|p__Firmicutes|c__Bacilli|o__Bacillales	17.400000000000002
+11	family	1|2|4|6|11	d__Bacteria|p__Proteobacteria|c__Gammaproteobacteria|o__Pseudomonadales|f__Pseudomonadaceae	4.199999999999999
+12	family	1|2|4|7|12	d__Bacteria|p__Proteobacteria|c__Gammaproteobacteria|o__Enterobacterales|f__Enterobacteriaceae	20.5
+13	family	1|3|5|8|13	d__Bacteria|p__Firmicutes|c__Bacilli|o__Lactobacillales|f__Lactobacillaceae	18.4
+14	family	1|3|5|8|14	d__Bacteria|p__Firmicutes|c__Bacilli|o__Lactobacillales|f__Enterococcaceae	9.899999999999999
+15	family	1|3|5|8|15	d__Bacteria|p__Firmicutes|c__Bacilli|o__Lactobacillales|f__Listeriaceae	14.099999999999998
+16	family	1|3|5|9|16	d__Bacteria|p__Firmicutes|c__Bacilli|o__Staphylococcales|f__Staphylococcaceae	15.5
+17	family	1|3|5|10|17	d__Bacteria|p__Firmicutes|c__Bacilli|o__Bacillales|f__Bacillaceae	17.400000000000002
+18	genus	1|2|4|6|11|18	d__Bacteria|p__Proteobacteria|c__Gammaproteobacteria|o__Pseudomonadales|f__Pseudomonadaceae|g__Pseudomonas	4.199999999999999
+19	genus	1|2|4|7|12|19	d__Bacteria|p__Proteobacteria|c__Gammaproteobacteria|o__Enterobacterales|f__Enterobacteriaceae|g__Escherichia-Shigella	10.100000000000001
+20	genus	1|2|4|7|12|20	d__Bacteria|p__Proteobacteria|c__Gammaproteobacteria|o__Enterobacterales|f__Enterobacteriaceae|g__Salmonella	10.4
+21	genus	1|3|5|8|13|21	d__Bacteria|p__Firmicutes|c__Bacilli|o__Lactobacillales|f__Lactobacillaceae|g__Limosilactobacillus	18.4
+22	genus	1|3|5|8|14|22	d__Bacteria|p__Firmicutes|c__Bacilli|o__Lactobacillales|f__Enterococcaceae|g__Enterococcus	9.899999999999999
+23	genus	1|3|5|8|15|23	d__Bacteria|p__Firmicutes|c__Bacilli|o__Lactobacillales|f__Listeriaceae|g__Listeria	14.099999999999998
+24	genus	1|3|5|9|16|24	d__Bacteria|p__Firmicutes|c__Bacilli|o__Staphylococcales|f__Staphylococcaceae|g__Staphylococcus	15.5
+25	genus	1|3|5|10|17|25	d__Bacteria|p__Firmicutes|c__Bacilli|o__Bacillales|f__Bacillaceae|g__Bacillus	17.400000000000002
+26	species	1|2|4|6|11|18|26	d__Bacteria|p__Proteobacteria|c__Gammaproteobacteria|o__Pseudomonadales|f__Pseudomonadaceae|g__Pseudomonas|s__Pseudomonas_aeruginosa	4.199999999999999
+27	species	1|2|4|7|12|19|27	d__Bacteria|p__Proteobacteria|c__Gammaproteobacteria|o__Enterobacterales|f__Enterobacteriaceae|g__Escherichia-Shigella|s__Escherichia_coli	10.100000000000001
+28	species	1|2|4|7|12|20|28	d__Bacteria|p__Proteobacteria|c__Gammaproteobacteria|o__Enterobacterales|f__Enterobacteriaceae|g__Salmonella|s__Salmonella_enterica	10.4
+29	species	1|3|5|8|13|21|29	d__Bacteria|p__Firmicutes|c__Bacilli|o__Lactobacillales|f__Lactobacillaceae|g__Limosilactobacillus|s__Lactobacillus_fermentum	18.4
+30	species	1|3|5|8|14|22|30	d__Bacteria|p__Firmicutes|c__Bacilli|o__Lactobacillales|f__Enterococcaceae|g__Enterococcus|s__Enterococcus_faecalis	9.899999999999999
+31	species	1|3|5|8|15|23|31	d__Bacteria|p__Firmicutes|c__Bacilli|o__Lactobacillales|f__Listeriaceae|g__Listeria|s__Listeria_monocytogenes	14.099999999999998
+32	species	1|3|5|9|16|24|32	d__Bacteria|p__Firmicutes|c__Bacilli|o__Staphylococcales|f__Staphylococcaceae|g__Staphylococcus|s__Staphylococcus_aureus	15.5
+33	species	1|3|5|10|17|25|33	d__Bacteria|p__Firmicutes|c__Bacilli|o__Bacillales|f__Bacillaceae|g__Bacillus|s__Bacillus_subtilis	17.400000000000002

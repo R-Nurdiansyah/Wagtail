@@ -1,0 +1,21 @@
+# Configuration file for Snakemake pipeline
+
+# Input files
+input_files:
+  filename_list: "0_data/filename_list.tsv"  # List of filenames, change to your own
+  file_map: "0_data/filemap.tsv"  # File map TSV with paths, change to your own
+ 
+#example filemap.tsv
+#accession filename
+
+# Output directory
+output_dir: "/path/to/output_directory"
+
+# Parameters
+sample_size: 1000    # Example parameter for processing
+threads: 8           # Number of threads to use in parallel jobs
+
+# Additional options
+options:
+  log_dir: "/path/to/log_directory"  # Directory for log files
+  temp_dir: "/path/to/temp_directory"  # Temporary directory

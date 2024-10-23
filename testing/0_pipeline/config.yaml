@@ -1,0 +1,6 @@
+# Configuration file for Snakemake pipeline
+
+#configurable parameters by user
+run_name: "Test1"
+sample_list: "/home/n11702427/m/users/r_nurdiansyah/wagtail/testing/0_data/EMP1.tsv"  #put your list of filenames file here, make sure it is one column with no header and just the accession number
+file_map: "/home/n11702427/m/users/r_nurdiansyah/wagtail/testing/0_data/file_map_EMP1.tsv"  #put your file map file here make sure it is two column with no header and just the accession number and absolute path to the file

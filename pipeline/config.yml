@@ -1,0 +1,5 @@
+# Configuration file for Snakemake pipeline
+
+#run name for the pipeline
+run_name: "Test1"
+sample_list: "" #put your list of filenames file here, make sure it is one column with no header and just the accession number
