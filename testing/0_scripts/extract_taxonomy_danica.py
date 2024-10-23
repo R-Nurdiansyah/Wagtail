@@ -54,11 +54,11 @@ def extract_taxonomy(input_primaryID, input_table, sample_name, output_taxonomy_
     joined = joined.join(duplicate_counts, on="column_1", how="left")
 
     #5. adjust the column_2 based on the duplicate count -> divide by the count and round up
-    joined = joined.with_columns([pl.col("column_2_right") / pl.col("counts")])
+    joined = joined.with_columns([pl.col("column_2_right") / pl.col("count")])
     joined = joined.with_columns([pl.col("column_2_right").round()])
 
     #6. check if there is any duplicate in column_2_right and if any, aggregate the value in column_2
-    joined = joined.groupby("column_2").agg(pl.sum("column_2_right").alias("column_2_right"))
+    joined = joined.group_by("column_2").agg(pl.sum("column_2_right").alias("column_2_right"))
 
     #7. edit the data to condensed format
     joined = pl.DataFrame.rename(joined, {"column_2_right": "coverage", "column_2": "taxonomy"})
@@ -80,7 +80,7 @@ def extract_taxonomy(input_primaryID, input_table, sample_name, output_taxonomy_
     joined = joined.with_columns(pl.col("taxonomy").str.replace_all(",s:", "; s__"))
     
     # recheck for duplicates and then sort by coverage
-    joined = joined.groupby("taxonomy").agg(pl.sum("coverage").alias("coverage"))
+    joined = joined.group_by("taxonomy").agg(pl.sum("coverage").alias("coverage"))
     joined = joined.sort("coverage", descending=True)
 
     #add "Root" at the start of each data in taxonomy column
@@ -93,7 +93,7 @@ def extract_taxonomy(input_primaryID, input_table, sample_name, output_taxonomy_
     joined = joined[["sample", "coverage", "taxonomy"]]
 
     #8. write the result to a new file
-    joined.write_csv(output_taxonomy_list, separator='\t', has_header=True)
+    joined.write_csv(output_taxonomy_list, separator='\t', include_header=True)
 
 if __name__ == '__main__':
     parent_parser = argparse.ArgumentParser(add_help=False)
