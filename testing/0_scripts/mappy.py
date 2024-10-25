@@ -20,31 +20,22 @@ def process_alignment(input, reference, alignment_output, metadata_output, sampl
     # Process each input sequence in the input file (assuming FASTA/FASTQ format)
     result_per_i = {}
     for name, seq, qual in mp.fastx_read(input, read_comment=False):
-        is_mapped = False  # To track duplicates
         # Perform alignment and store results
         for hits in ref.map(seq):
             if hits.is_primary:
                 result_per_i[name] = (hits.ctg)
                 alignment_counter['mapped'] += 1
                 total_mapq += hits.mapq
-                is_mapped = True
                 break # Only consider primary alignment
             else:
                 alignment_counter['unmapped'] += 1
-    #count the number of hits using Counter
-    ctg_counts = Counter(result_per_i.values())
-
+        
     #record the ctg_counts dictionary to a tsv file using polars
-    df = pl.from_dict(ctg_counts)
+    df = pl.from_dict(result_per_i)
     df = df.transpose(include_header=True)
     #add sample column on the first column and fill the value with user's input (sample name)
-    df.columns = ['contig', 'count']
-    df = df.with_columns(pl.Series("sample", [sample_id]*len(df)))
-    #reorder the column to match the biobox script input while delete the unnecessary columns
-    df = df[["sample", "contig", "count"]]
-    #sort based on count
-    df = df.sort("count", descending=True)
-    df.write_csv(f"{alignment_output}/{sample_id}_alignment.tsv", separator='\t')
+    df.columns = ['read', 'contig']
+    df.write_csv(alignment_output, separator='\t')
     #logging.info(f"Alignment successfully saved to {alignment_output}/{sample_id}_alignment.tsv")
 
     # Calculate metadata
@@ -62,7 +53,7 @@ def process_alignment(input, reference, alignment_output, metadata_output, sampl
     'average mapq': [average_mapq]
     })
 
-    metadata.write_csv(f"{metadata_output}/{sample_id}_metadata.tsv", separator='\t')
+    metadata.write_csv(metadata_output, separator='\t')
 
 if __name__ == "__main__":
     parent_parser = argparse.ArgumentParser(description='Run mappy for both paired and single-end')

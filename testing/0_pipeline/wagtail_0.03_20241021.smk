@@ -20,7 +20,7 @@ filenames = [line.strip() for line in open(filename_list)]
 #rule all to run all the rules at once
 rule all:
     input:
-        expand("6_condensed_combine/{filename}_condensed.tsv", filename = filenames),
+        expand("6_condensed_wagtail/{filename}_condensed.tsv", filename = filenames),
         "0_metadata/{params.run_name}/metadata.tsv"
 
 rule manifest:
@@ -34,7 +34,7 @@ rule manifest:
         output_dir = directory(f"{data_dir}/manifest/{{filename}}"),
         manifest = f"{data_dir}/manifest/{{filename}}/{{filename}}_manifest.csv"
     wildcard_constraints:
-        filename = r"[^\.]+"  # Regex untuk memastikan tidak ada '.' dalam wildcard 'filename'
+        filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard 
     params:
         #defining the used script for this rule
         script = f"{script_dir}/create_manifest_wagtail.py",
@@ -42,16 +42,16 @@ rule manifest:
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
-        "0_logs_combine/{filename}/manifest_creation.log"
+        "0_logs_wagtail/{filename}/manifest_creation.log"
     benchmark:
-        "0_logs_combine/{filename}/manifest_creation.benchmark.txt"
+        "0_logs_wagtail/{filename}/manifest_creation.benchmark.txt"
     threads:
         1
     resources:
         mem_mb = 32000,
         runtime = "96h"
     shell:
-        "(python {params.script} --input {params.filename} --file_map {input.filemap} "
+        "(python {params.script} --input {params.filename} --file-map {input.filemap} "
         "--output {output.output_dir}| touch {output.manifest}) 2> {log}"
 
 rule qiime2_import: #read the data inside the directory
@@ -60,16 +60,16 @@ rule qiime2_import: #read the data inside the directory
     input:
         manifest = f"{data_dir}/manifest/{{filename}}/{{filename}}_manifest.csv"
     output:
-        "1_import_combine/{filename}-single.qza"
+        "1_import_wagtail/{filename}-single.qza"
     wildcard_constraints:
-        filename = r"[^\.]+"  # Regex untuk memastikan tidak ada '.' dalam wildcard 'filename'
+        filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard 
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
-        "0_logs_combine/{filename}/qiime2_import.log"
+        "0_logs_wagtail/{filename}/qiime2_import.log"
         #log and benchmark files are located in 0_logs folder and the subdirectory with user-defined name
     benchmark:
-        "0_logs_combine/{filename}/qiime2_import.benchmark.txt"
+        "0_logs_wagtail/{filename}/qiime2_import.benchmark.txt"
     threads:
         1
     resources:
@@ -84,18 +84,18 @@ rule qiime2_import: #read the data inside the directory
 rule quality_control:
     #run the quality control using qiime2 quality-filter q-score
     input: 
-        "1_import_combine/{filename}-single.qza"
+        "1_import_wagtail/{filename}-single.qza"
     output: 
-        filtered = "2_qc_combine/{filename}-filtered.qza",
-        stats = "2_qc_combine/{filename}-qc-stats.qza"
+        filtered = "2_qc_wagtail/{filename}-filtered.qza",
+        stats = "2_qc_wagtail/{filename}-qc-stats.qza"
     wildcard_constraints:
-        filename = r"[^\.]+"  # Regex untuk memastikan tidak ada '.' dalam wildcard 'filename'
+        filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard 
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
-        "0_logs_combine1/{filename}/quality_control.log"
+        "0_logs_wagtail1/{filename}/quality_control.log"
     benchmark:
-        "0_logs_combine1/{filename}/quality_control.benchmark.txt"
+        "0_logs_wagtail1/{filename}/quality_control.benchmark.txt"
     threads:
         1
     resources:
@@ -109,19 +109,19 @@ rule deblur:
 #demultiplex the data to get the representative sequences, OTU table, and denoising stats
 #delete the trunc length as it is only single end data
     input: 
-        "2_qc_combine/{filename}-filtered.qza"
+        "2_qc_wagtail/{filename}-filtered.qza"
     output: 
-        representative = "3_deblur_combine/{filename}-rep-seqs.qza",
-        table = "3_deblur_combine/{filename}-table.qza",
-        stats = "3_deblur_combine/{filename}-deblur-stats.qza"
+        representative = "3_deblur_wagtail/{filename}-rep-seqs.qza",
+        table = "3_deblur_wagtail/{filename}-table.qza",
+        stats = "3_deblur_wagtail/{filename}-deblur-stats.qza"
     wildcard_constraints:
-        filename = r"[^\.]+"  # Regex untuk memastikan tidak ada '.' dalam wildcard 'filename'
+        filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard 
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
-        "0_logs_combine/{filename}/qc.log"
+        "0_logs_wagtail/{filename}/qc.log"
     benchmark:
-        "0_logs_combine/{filename}/qc.benchmark.txt"
+        "0_logs_wagtail/{filename}/qc.benchmark.txt"
     threads:
         1
     resources:
@@ -138,21 +138,21 @@ rule deblur:
 rule export_seqs:
 #export the biom table from the abundance table using the custom script
     input: 
-        representative = "3_deblur_combine/{filename}-rep-seqs.qza"
+        representative = "3_deblur_wagtail/{filename}-rep-seqs.qza"
     output:
-        output = directory("4_rep_seqs_combine/{filename}"),
-        final = "4_rep_seqs_combine/{filename}/dna-sequences.fasta"
+        output = directory("4_rep_seqs_wagtail/{filename}"),
+        final = "4_rep_seqs_wagtail/{filename}/dna-sequences.fasta"
     wildcard_constraints:
-        filename = r"[^\.]+"  # Regex untuk memastikan tidak ada '.' dalam wildcard 'filename'
+        filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard 
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     params:
         #defining the used script for this rule
         script = f"{script_dir}/qiime2_seqs_export.py",
     log:
-        "0_logs_combine/{filename}/export_seqs.log"
+        "0_logs_wagtail/{filename}/export_seqs.log"
     benchmark:
-        "0_logs_combine/{filename}/export_seqs.benchmark.txt"
+        "0_logs_wagtail/{filename}/export_seqs.benchmark.txt"
     threads:
         1
     resources:
@@ -166,15 +166,14 @@ rule mappy:
 #use mappy script in version 0.03
     input:
         #as the product is one file, we can use single input
-        F = "4_rep_seqs_combine/{filename}/dna-sequences.fasta",
+        F = "4_rep_seqs_wagtail/{filename}/dna-sequences.fasta",
     #ref is the indexed database from rule indexing
         ref = f"{db_dir}/danica.mmi"
     output:
-        directory = directory("5_taxonomy_combine/{filename}"),
-        align = "5_taxonomy_combine/{filename}/{filename}_alignment.tsv",
-        meta = "5_taxonomy_combine/{filename}/{filename}_metadata.tsv"
+        align = "5_taxonomy_wagtail/{filename}/{filename}_alignment.tsv",
+        meta = "5_taxonomy_wagtail/{filename}/{filename}_metadata.tsv"
     wildcard_constraints:
-        filename = r"[^\.]+"  # Regex untuk memastikan tidak ada '.' dalam wildcard 'filename'
+        filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard 
     conda:
         "envs/mappy.yaml"
     params:
@@ -182,10 +181,10 @@ rule mappy:
         script = f"{script_dir}/mappy.py",
         sample = "{filename}"
     log:
-        "0_logs_combine/{filename}/mappy.log"
+        "0_logs_wagtail/{filename}/mappy.log"
         #log and benchmark files are located in 0_logs folder and the subdirectory with user-defined name
     benchmark:
-        "0_logs_combine/{filename}/mappy.benchmark.txt"
+        "0_logs_wagtail/{filename}/mappy.benchmark.txt"
     threads:
         1
     resources:
@@ -193,16 +192,16 @@ rule mappy:
         runtime = "96h"
     shell:
         "(python {params.script} -r {input.F} "
-        "-i {input.ref} -a {output.directory} -m {output.directory} "
+        "-i {input.ref} -a {output.align} -m {output.meta} "
         "-s {params.sample} 2> {log}"
 
 rule export_table:
 #export the biom table from the abundance table using the custom script
     input: 
-        table = "3_deblur_combine/{filename}-table.qza"
+        table = "3_deblur_wagtail/{filename}-table.qza"
     output:
-        output = directory("4_table_combine/{filename}_biom"),
-        final = "4_table_combine/{filename}_biom/{filename}.biom"
+        output = directory("4_table_wagtail/{filename}_biom"),
+        final = "4_table_wagtail/{filename}_biom/{filename}.biom"
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex untuk memastikan tidak ada '.' dalam wildcard 'filename'
     conda:
@@ -213,9 +212,9 @@ rule export_table:
         #parameter to change the filename for the script
         name = "{filename}.biom"
     log:
-        "0_logs_combine/{filename}/export_table.log"
+        "0_logs_wagtail/{filename}/export_table.log"
     benchmark:
-        "0_logs_combine/{filename}/export_biom.benchmark.txt"
+        "0_logs_wagtail/{filename}/export_biom.benchmark.txt"
     threads:
         1
     resources:
@@ -230,17 +229,17 @@ rule biom_to_tsv:
 #convert the biom table to tsv table
     input:
     #check the directory from the previous rule and read the biom table inside
-        "4_table_combine/{filename}_biom/{filename}.biom"
+        "4_table_wagtail/{filename}_biom/{filename}.biom"
     output: 
-        "4_table_combine/{filename}_table.tsv"
+        "4_table_wagtail/{filename}_table.tsv"
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex untuk memastikan tidak ada '.' dalam wildcard 'filename'
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
-        "0_logs_combine/{filename}/biom_to_tsv.log"
+        "0_logs_wagtail/{filename}/biom_to_tsv.log"
     benchmark:
-        "0_logs_combine/{filename}/biom_to_tsv.benchmark.txt"
+        "0_logs_wagtail/{filename}/biom_to_tsv.benchmark.txt"
     threads:
         1
     resources:
@@ -252,17 +251,17 @@ rule biom_to_tsv:
 rule edit_table:
 #to edit the abundance tsv file for input in the next script, take all from 3rd lines
     input: 
-        "4_table_combine/{filename}_table.tsv"
+        "4_table_wagtail/{filename}_table.tsv"
     output: 
-        "5_taxonomy_combine/{filename}/{filename}_table_edit.tsv"
+        "5_taxonomy_wagtail/{filename}/{filename}_table_edit.tsv"
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex untuk memastikan tidak ada '.' dalam wildcard 'filename'
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
-        "0_logs_combine/{filename}/edit_table.log"
+        "0_logs_wagtail/{filename}/edit_table.log"
     benchmark:
-        "0_logs_combine/{filename}/edit_table.benchmark.txt"
+        "0_logs_wagtail/{filename}/edit_table.benchmark.txt"
     threads:
         1
     resources:
@@ -274,10 +273,10 @@ rule edit_table:
 rule extract_taxonomy:
 #extract taxonomy data based on the database and format the output for filling the taxonomy
     input:
-        primary = "5_taxonomy_combine/{filename}/{filename}_alignment.tsv",
-        table = "5_taxonomy_combine/{filename}/{filename}_table_edit.tsv"
+        primary = "5_taxonomy_wagtail/{filename}/{filename}_alignment.tsv",
+        table = "5_taxonomy_wagtail/{filename}/{filename}_table_edit.tsv"
     output: 
-        "6_condensed_combine/{filename}_condensed.tsv"
+        "6_condensed_wagtail/{filename}_condensed.tsv"
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex untuk memastikan tidak ada '.' dalam wildcard 'filename'
     params:
@@ -288,9 +287,9 @@ rule extract_taxonomy:
     conda:
         "envs/mappy.yaml"
     log:
-        "0_logs_combine/{filename}/extract_taxonomy.log"
+        "0_logs_wagtail/{filename}/extract_taxonomy.log"
     benchmark:
-        "0_logs_combine/{filename}/extract_taxonomy.benchmark.txt"
+        "0_logs_wagtail/{filename}/extract_taxonomy.benchmark.txt"
     threads:
         1
     resources:
@@ -305,13 +304,13 @@ rule extract_taxonomy:
 rule qiime_stats:
 #wrote the metadata for the run
     input: 
-        qc = "2_qc_combine/{filename}-qc-stats.qza",
-        deblur = "3_deblur_combine/{filename}-deblur-stats.qza"
+        qc = "2_qc_wagtail/{filename}-qc-stats.qza",
+        deblur = "3_deblur_wagtail/{filename}-deblur-stats.qza"
     output: 
-        output_qc = directory("2_qc_combine/{filename}"),
-        output_deblur = directory("3_deblur_combine/{filename}"),
-        final_qc = "2_qc_combine/{filename}/stats.csv",
-        final_deblur = "3_deblur_combine/{filename}/stats.csv"
+        output_qc = directory("2_qc_wagtail/{filename}"),
+        output_deblur = directory("3_deblur_wagtail/{filename}"),
+        final_qc = "2_qc_wagtail/{filename}/stats.csv",
+        final_deblur = "3_deblur_wagtail/{filename}/stats.csv"
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex untuk memastikan tidak ada '.' dalam wildcard 'filename'
     params:
@@ -320,9 +319,9 @@ rule qiime_stats:
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
-        "0_logs_combine/{filename}/qiime_stats.log"
+        "0_logs_wagtail/{filename}/qiime_stats.log"
     benchmark:
-        "0_logs_combine/{filename}/qiime_stats.benchmark.txt"
+        "0_logs_wagtail/{filename}/qiime_stats.benchmark.txt"
     threads:
         1
     resources:
@@ -335,9 +334,9 @@ rule qiime_stats:
 rule metadata_creation:
 #wrote the metadata for the run
     input: 
-        final_qc = "2_qc_combine/{filename}/stats.csv",
-        final_deblur = "3_deblur_combine/{filename}/stats.csv",
-        final_mappy = "5_taxonomy_combine/{filename}/{filename}_metadata.tsv"
+        final_qc = "2_qc_wagtail/{filename}/stats.csv",
+        final_deblur = "3_deblur_wagtail/{filename}/stats.csv",
+        final_mappy = "5_taxonomy_wagtail/{filename}/{filename}_metadata.tsv"
     output: 
         directory = directory("0_metadata/{filename}"),
         final = "0_metadata/{filename}/{filename}_metadata.tsv"
@@ -350,9 +349,9 @@ rule metadata_creation:
     conda:
         "envs/mappy.yaml"
     log:
-        "0_logs_combine/{filename}/metadata.log"
+        "0_logs_wagtail/{filename}/metadata.log"
     benchmark:
-        "0_logs_combine/{filename}/metadata.benchmark.txt"
+        "0_logs_wagtail/{filename}/metadata.benchmark.txt"
     threads:
         1
     resources:
@@ -376,9 +375,9 @@ rule metadata_combine:
     conda:
         "envs/mappy.yaml"
     log:
-        "0_logs_combine/{params.run_name}/metadata_combine.log"
+        "0_logs_wagtail/{params.run_name}/metadata_wagtail.log"
     benchmark:
-        "0_logs_combine/{params.run_name}/metadata_combine.benchmark.txt"
+        "0_logs_wagtail/{params.run_name}/metadata_wagtail.benchmark.txt"
     threads:
         1
     resources:
