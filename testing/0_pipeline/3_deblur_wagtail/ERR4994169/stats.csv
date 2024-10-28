@@ -1,0 +1,2 @@
+sample-id,reads-raw,unique-reads-derep,reads-derep,unique-reads-deblur,reads-deblur,unique-reads-hit-artifact,reads-hit-artifact,unique-reads-chimeric,reads-chimeric,unique-reads-hit-reference,reads-hit-reference,unique-reads-missed-reference,reads-missed-reference
+ERR4994169,13230,791,10151,373,7887,0,0,42,123,330,7762,1,2

@@ -1,0 +1,11 @@
+dist
+.vscode/
+.snakemake/
+*.project
+*~
+*.pydevproject
+*.pyc
+target
+work
+*.nextflow*.vscode
+*.tmp

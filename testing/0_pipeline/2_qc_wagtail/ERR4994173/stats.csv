@@ -1,0 +1,2 @@
+sample-id,total-input-reads,total-retained-reads,reads-truncated,reads-too-short-after-truncation,reads-exceeding-maximum-ambiguous-bases
+ERR4994173,22413,22413,0,0,0

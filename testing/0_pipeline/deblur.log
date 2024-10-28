@@ -1,0 +1,148 @@
+INFO(47889800154048)2024-10-25 10:22:19,112:*************************
+INFO(47889800154048)2024-10-25 10:22:19,112:deblurring started
+WARNING(47889800154048)2024-10-25 10:22:19,113:deblur version 1.1.1 workflow started on /data1/pbs.11577139.pbs/qiime2/n11702427/data/0ff76180-9581-43e6-b332-63012eea8baf/data
+WARNING(47889800154048)2024-10-25 10:22:19,113:parameters: {'seqs_fp': '/data1/pbs.11577139.pbs/qiime2/n11702427/data/0ff76180-9581-43e6-b332-63012eea8baf/data', 'output_dir': '/data1/pbs.11577139.pbs/tmpo4ufj3ps', 'pos_ref_fp': (), 'pos_ref_db_fp': (), 'neg_ref_fp': (), 'neg_ref_db_fp': (), 'overwrite': True, 'mean_error': 0.005, 'error_dist': [1.0, 0.06, 0.02, 0.02, 0.01, 0.005, 0.005, 0.005, 0.001, 0.001, 0.001, 0.0005], 'indel_prob': 0.01, 'indel_max': 3, 'trim_length': -1, 'left_trim_length': 0, 'min_reads': 0, 'min_size': 2, 'threads_per_sample': 1, 'keep_tmp_files': True, 'log_level': 2, 'log_file': '/mnt/hpccs01/work/microbiome/users/r_nurdiansyah/wagtail/testing/0_pipeline/deblur.log', 'jobs_to_start': 1, 'is_worker_thread': False, 'logger': <Logger __main__ (INFO)>}
+INFO(47889800154048)2024-10-25 10:22:19,113:error_dist is : [1.0, 0.06, 0.02, 0.02, 0.01, 0.005, 0.005, 0.005, 0.001, 0.001, 0.001, 0.0005]
+INFO(47889800154048)2024-10-25 10:22:19,113:deblur main program started
+INFO(47889800154048)2024-10-25 10:22:19,114:processing directory /data1/pbs.11577139.pbs/qiime2/n11702427/data/0ff76180-9581-43e6-b332-63012eea8baf/data
+INFO(47889800154048)2024-10-25 10:22:19,115:building negative db sortmerna index files
+INFO(47889800154048)2024-10-25 10:22:19,115:build_index_sortmerna files ['/mnt/hpccs01/work/microbiome/users/r_nurdiansyah/wagtail/testing/0_pipeline/.snakemake/conda/72d8b46582f874ea1045c49cc9fc9850_/lib/python3.8/site-packages/deblur/support_files/artifacts.fa'] to dir /data1/pbs.11577139.pbs/tmpo4ufj3ps/deblur_working_dir
+INFO(47889800154048)2024-10-25 10:22:19,278:building positive db sortmerna index files
+INFO(47889800154048)2024-10-25 10:22:19,278:build_index_sortmerna files ['/mnt/hpccs01/work/microbiome/users/r_nurdiansyah/wagtail/testing/0_pipeline/.snakemake/conda/72d8b46582f874ea1045c49cc9fc9850_/lib/python3.8/site-packages/deblur/support_files/88_otus.fasta'] to dir /data1/pbs.11577139.pbs/tmpo4ufj3ps/deblur_working_dir
+INFO(47833515146176)2024-10-25 10:22:19,927:*************************
+INFO(47833515146176)2024-10-25 10:22:19,958:deblurring started
+WARNING(47833515146176)2024-10-25 10:22:19,958:deblur version 1.1.1 workflow started on /data1/pbs.11577138.pbs/qiime2/n11702427/data/91d283dc-a1d8-420d-a4d4-65a995601e9f/data
+WARNING(47833515146176)2024-10-25 10:22:19,958:parameters: {'seqs_fp': '/data1/pbs.11577138.pbs/qiime2/n11702427/data/91d283dc-a1d8-420d-a4d4-65a995601e9f/data', 'output_dir': '/data1/pbs.11577138.pbs/tmpn4lz8vmy', 'pos_ref_fp': (), 'pos_ref_db_fp': (), 'neg_ref_fp': (), 'neg_ref_db_fp': (), 'overwrite': True, 'mean_error': 0.005, 'error_dist': [1.0, 0.06, 0.02, 0.02, 0.01, 0.005, 0.005, 0.005, 0.001, 0.001, 0.001, 0.0005], 'indel_prob': 0.01, 'indel_max': 3, 'trim_length': -1, 'left_trim_length': 0, 'min_reads': 0, 'min_size': 2, 'threads_per_sample': 1, 'keep_tmp_files': True, 'log_level': 2, 'log_file': '/mnt/hpccs01/work/microbiome/users/r_nurdiansyah/wagtail/testing/0_pipeline/deblur.log', 'jobs_to_start': 1, 'is_worker_thread': False, 'logger': <Logger __main__ (INFO)>}
+INFO(47833515146176)2024-10-25 10:22:19,958:error_dist is : [1.0, 0.06, 0.02, 0.02, 0.01, 0.005, 0.005, 0.005, 0.001, 0.001, 0.001, 0.0005]
+INFO(47833515146176)2024-10-25 10:22:19,958:deblur main program started
+INFO(47833515146176)2024-10-25 10:22:19,959:processing directory /data1/pbs.11577138.pbs/qiime2/n11702427/data/91d283dc-a1d8-420d-a4d4-65a995601e9f/data
+INFO(47833515146176)2024-10-25 10:22:19,960:building negative db sortmerna index files
+INFO(47833515146176)2024-10-25 10:22:19,960:build_index_sortmerna files ['/mnt/hpccs01/work/microbiome/users/r_nurdiansyah/wagtail/testing/0_pipeline/.snakemake/conda/72d8b46582f874ea1045c49cc9fc9850_/lib/python3.8/site-packages/deblur/support_files/artifacts.fa'] to dir /data1/pbs.11577138.pbs/tmpn4lz8vmy/deblur_working_dir
+INFO(47833515146176)2024-10-25 10:22:20,112:building positive db sortmerna index files
+INFO(47833515146176)2024-10-25 10:22:20,112:build_index_sortmerna files ['/mnt/hpccs01/work/microbiome/users/r_nurdiansyah/wagtail/testing/0_pipeline/.snakemake/conda/72d8b46582f874ea1045c49cc9fc9850_/lib/python3.8/site-packages/deblur/support_files/88_otus.fasta'] to dir /data1/pbs.11577138.pbs/tmpn4lz8vmy/deblur_working_dir
+INFO(47889800154048)2024-10-25 10:23:08,420:processing per sample fasta files
+INFO(47889800154048)2024-10-25 10:23:08,421:--------------------------------------------------------
+INFO(47889800154048)2024-10-25 10:23:08,421:launch_workflow for file /data1/pbs.11577139.pbs/qiime2/n11702427/data/0ff76180-9581-43e6-b332-63012eea8baf/data/ERR4994173_0_L001_R1_001.fastq.gz
+INFO(47833515146176)2024-10-25 10:23:08,685:processing per sample fasta files
+INFO(47833515146176)2024-10-25 10:23:08,688:--------------------------------------------------------
+INFO(47833515146176)2024-10-25 10:23:08,688:launch_workflow for file /data1/pbs.11577138.pbs/qiime2/n11702427/data/91d283dc-a1d8-420d-a4d4-65a995601e9f/data/ERR4994169_0_L001_R1_001.fastq.gz
+INFO(47833515146176)2024-10-25 10:23:12,744:dereplicate seqs file /data1/pbs.11577138.pbs/tmpn4lz8vmy/deblur_working_dir/ERR4994169_0_L001_R1_001.fastq.gz.trim
+INFO(47833515146176)2024-10-25 10:23:12,846:remove_artifacts_seqs file /data1/pbs.11577138.pbs/tmpn4lz8vmy/deblur_working_dir/ERR4994169_0_L001_R1_001.fastq.gz.trim.derep
+INFO(47833515146176)2024-10-25 10:23:13,688:total sequences 800, passing sequences 800, failing sequences 0
+INFO(47833515146176)2024-10-25 10:23:13,689:multiple_sequence_alignment seqs file /data1/pbs.11577138.pbs/tmpn4lz8vmy/deblur_working_dir/ERR4994169_0_L001_R1_001.fastq.gz.trim.derep.no_artifacts
+INFO(47889800154048)2024-10-25 10:23:15,009:dereplicate seqs file /data1/pbs.11577139.pbs/tmpo4ufj3ps/deblur_working_dir/ERR4994173_0_L001_R1_001.fastq.gz.trim
+INFO(47889800154048)2024-10-25 10:23:15,082:remove_artifacts_seqs file /data1/pbs.11577139.pbs/tmpo4ufj3ps/deblur_working_dir/ERR4994173_0_L001_R1_001.fastq.gz.trim.derep
+INFO(47889800154048)2024-10-25 10:23:15,844:total sequences 1128, passing sequences 1124, failing sequences 4
+INFO(47889800154048)2024-10-25 10:23:15,844:multiple_sequence_alignment seqs file /data1/pbs.11577139.pbs/tmpo4ufj3ps/deblur_working_dir/ERR4994173_0_L001_R1_001.fastq.gz.trim.derep.no_artifacts
+INFO(47318776773568)2024-10-25 10:57:14,006:*************************
+INFO(47318776773568)2024-10-25 10:57:14,010:deblurring started
+WARNING(47318776773568)2024-10-25 10:57:14,011:deblur version 1.1.1 workflow started on /data1/pbs.11577162.pbs/qiime2/n11702427/data/91d283dc-a1d8-420d-a4d4-65a995601e9f/data
+WARNING(47318776773568)2024-10-25 10:57:14,011:parameters: {'seqs_fp': '/data1/pbs.11577162.pbs/qiime2/n11702427/data/91d283dc-a1d8-420d-a4d4-65a995601e9f/data', 'output_dir': '/data1/pbs.11577162.pbs/tmpymp93zcz', 'pos_ref_fp': (), 'pos_ref_db_fp': (), 'neg_ref_fp': (), 'neg_ref_db_fp': (), 'overwrite': True, 'mean_error': 0.005, 'error_dist': [1.0, 0.06, 0.02, 0.02, 0.01, 0.005, 0.005, 0.005, 0.001, 0.001, 0.001, 0.0005], 'indel_prob': 0.01, 'indel_max': 3, 'trim_length': -1, 'left_trim_length': 0, 'min_reads': 0, 'min_size': 2, 'threads_per_sample': 1, 'keep_tmp_files': True, 'log_level': 2, 'log_file': '/mnt/hpccs01/work/microbiome/users/r_nurdiansyah/wagtail/testing/0_pipeline/deblur.log', 'jobs_to_start': 1, 'is_worker_thread': False, 'logger': <Logger __main__ (INFO)>}
+INFO(47318776773568)2024-10-25 10:57:14,011:error_dist is : [1.0, 0.06, 0.02, 0.02, 0.01, 0.005, 0.005, 0.005, 0.001, 0.001, 0.001, 0.0005]
+INFO(47318776773568)2024-10-25 10:57:14,011:deblur main program started
+INFO(47318776773568)2024-10-25 10:57:14,011:processing directory /data1/pbs.11577162.pbs/qiime2/n11702427/data/91d283dc-a1d8-420d-a4d4-65a995601e9f/data
+INFO(47318776773568)2024-10-25 10:57:14,012:building negative db sortmerna index files
+INFO(47318776773568)2024-10-25 10:57:14,012:build_index_sortmerna files ['/mnt/hpccs01/work/microbiome/users/r_nurdiansyah/wagtail/testing/0_pipeline/.snakemake/conda/72d8b46582f874ea1045c49cc9fc9850_/lib/python3.8/site-packages/deblur/support_files/artifacts.fa'] to dir /data1/pbs.11577162.pbs/tmpymp93zcz/deblur_working_dir
+INFO(47318776773568)2024-10-25 10:57:14,139:building positive db sortmerna index files
+INFO(47318776773568)2024-10-25 10:57:14,140:build_index_sortmerna files ['/mnt/hpccs01/work/microbiome/users/r_nurdiansyah/wagtail/testing/0_pipeline/.snakemake/conda/72d8b46582f874ea1045c49cc9fc9850_/lib/python3.8/site-packages/deblur/support_files/88_otus.fasta'] to dir /data1/pbs.11577162.pbs/tmpymp93zcz/deblur_working_dir
+INFO(47683593337792)2024-10-25 10:57:14,612:*************************
+INFO(47683593337792)2024-10-25 10:57:14,704:deblurring started
+WARNING(47683593337792)2024-10-25 10:57:14,705:deblur version 1.1.1 workflow started on /data1/pbs.11577161.pbs/qiime2/n11702427/data/0ff76180-9581-43e6-b332-63012eea8baf/data
+WARNING(47683593337792)2024-10-25 10:57:14,705:parameters: {'seqs_fp': '/data1/pbs.11577161.pbs/qiime2/n11702427/data/0ff76180-9581-43e6-b332-63012eea8baf/data', 'output_dir': '/data1/pbs.11577161.pbs/tmpk642mcje', 'pos_ref_fp': (), 'pos_ref_db_fp': (), 'neg_ref_fp': (), 'neg_ref_db_fp': (), 'overwrite': True, 'mean_error': 0.005, 'error_dist': [1.0, 0.06, 0.02, 0.02, 0.01, 0.005, 0.005, 0.005, 0.001, 0.001, 0.001, 0.0005], 'indel_prob': 0.01, 'indel_max': 3, 'trim_length': -1, 'left_trim_length': 0, 'min_reads': 0, 'min_size': 2, 'threads_per_sample': 1, 'keep_tmp_files': True, 'log_level': 2, 'log_file': '/mnt/hpccs01/work/microbiome/users/r_nurdiansyah/wagtail/testing/0_pipeline/deblur.log', 'jobs_to_start': 1, 'is_worker_thread': False, 'logger': <Logger __main__ (INFO)>}
+INFO(47683593337792)2024-10-25 10:57:14,705:error_dist is : [1.0, 0.06, 0.02, 0.02, 0.01, 0.005, 0.005, 0.005, 0.001, 0.001, 0.001, 0.0005]
+INFO(47683593337792)2024-10-25 10:57:14,705:deblur main program started
+INFO(47683593337792)2024-10-25 10:57:14,706:processing directory /data1/pbs.11577161.pbs/qiime2/n11702427/data/0ff76180-9581-43e6-b332-63012eea8baf/data
+INFO(47683593337792)2024-10-25 10:57:14,707:building negative db sortmerna index files
+INFO(47683593337792)2024-10-25 10:57:14,707:build_index_sortmerna files ['/mnt/hpccs01/work/microbiome/users/r_nurdiansyah/wagtail/testing/0_pipeline/.snakemake/conda/72d8b46582f874ea1045c49cc9fc9850_/lib/python3.8/site-packages/deblur/support_files/artifacts.fa'] to dir /data1/pbs.11577161.pbs/tmpk642mcje/deblur_working_dir
+INFO(47683593337792)2024-10-25 10:57:14,875:building positive db sortmerna index files
+INFO(47683593337792)2024-10-25 10:57:14,875:build_index_sortmerna files ['/mnt/hpccs01/work/microbiome/users/r_nurdiansyah/wagtail/testing/0_pipeline/.snakemake/conda/72d8b46582f874ea1045c49cc9fc9850_/lib/python3.8/site-packages/deblur/support_files/88_otus.fasta'] to dir /data1/pbs.11577161.pbs/tmpk642mcje/deblur_working_dir
+INFO(47318776773568)2024-10-25 10:58:03,350:processing per sample fasta files
+INFO(47318776773568)2024-10-25 10:58:03,352:--------------------------------------------------------
+INFO(47318776773568)2024-10-25 10:58:03,352:launch_workflow for file /data1/pbs.11577162.pbs/qiime2/n11702427/data/91d283dc-a1d8-420d-a4d4-65a995601e9f/data/ERR4994169_0_L001_R1_001.fastq.gz
+INFO(47683593337792)2024-10-25 10:58:04,070:processing per sample fasta files
+INFO(47683593337792)2024-10-25 10:58:04,076:--------------------------------------------------------
+INFO(47683593337792)2024-10-25 10:58:04,076:launch_workflow for file /data1/pbs.11577161.pbs/qiime2/n11702427/data/0ff76180-9581-43e6-b332-63012eea8baf/data/ERR4994173_0_L001_R1_001.fastq.gz
+INFO(47318776773568)2024-10-25 10:58:07,233:dereplicate seqs file /data1/pbs.11577162.pbs/tmpymp93zcz/deblur_working_dir/ERR4994169_0_L001_R1_001.fastq.gz.trim
+INFO(47318776773568)2024-10-25 10:58:07,285:remove_artifacts_seqs file /data1/pbs.11577162.pbs/tmpymp93zcz/deblur_working_dir/ERR4994169_0_L001_R1_001.fastq.gz.trim.derep
+INFO(47318776773568)2024-10-25 10:58:08,015:total sequences 800, passing sequences 800, failing sequences 0
+INFO(47318776773568)2024-10-25 10:58:08,015:multiple_sequence_alignment seqs file /data1/pbs.11577162.pbs/tmpymp93zcz/deblur_working_dir/ERR4994169_0_L001_R1_001.fastq.gz.trim.derep.no_artifacts
+INFO(47683593337792)2024-10-25 10:58:10,856:dereplicate seqs file /data1/pbs.11577161.pbs/tmpk642mcje/deblur_working_dir/ERR4994173_0_L001_R1_001.fastq.gz.trim
+INFO(47683593337792)2024-10-25 10:58:10,935:remove_artifacts_seqs file /data1/pbs.11577161.pbs/tmpk642mcje/deblur_working_dir/ERR4994173_0_L001_R1_001.fastq.gz.trim.derep
+INFO(47683593337792)2024-10-25 10:58:11,711:total sequences 1128, passing sequences 1124, failing sequences 4
+INFO(47683593337792)2024-10-25 10:58:11,711:multiple_sequence_alignment seqs file /data1/pbs.11577161.pbs/tmpk642mcje/deblur_working_dir/ERR4994173_0_L001_R1_001.fastq.gz.trim.derep.no_artifacts
+INFO(47647370787776)2024-10-25 11:43:17,131:*************************
+INFO(47564344814528)2024-10-25 11:43:17,138:*************************
+INFO(47647370787776)2024-10-25 11:43:17,139:deblurring started
+INFO(47564344814528)2024-10-25 11:43:17,163:deblurring started
+WARNING(47647370787776)2024-10-25 11:43:17,165:deblur version 1.1.1 workflow started on /data1/pbs.11577179.pbs/qiime2/n11702427/data/91d283dc-a1d8-420d-a4d4-65a995601e9f/data
+WARNING(47564344814528)2024-10-25 11:43:17,165:deblur version 1.1.1 workflow started on /data1/pbs.11577178.pbs/qiime2/n11702427/data/0ff76180-9581-43e6-b332-63012eea8baf/data
+WARNING(47647370787776)2024-10-25 11:43:17,179:parameters: {'seqs_fp': '/data1/pbs.11577179.pbs/qiime2/n11702427/data/91d283dc-a1d8-420d-a4d4-65a995601e9f/data', 'output_dir': '/data1/pbs.11577179.pbs/tmp3tn3866g', 'pos_ref_fp': (), 'pos_ref_db_fp': (), 'neg_ref_fp': (), 'neg_ref_db_fp': (), 'overwrite': True, 'mean_error': 0.005, 'error_dist': [1.0, 0.06, 0.02, 0.02, 0.01, 0.005, 0.005, 0.005, 0.001, 0.001, 0.001, 0.0005], 'indel_prob': 0.01, 'indel_max': 3, 'trim_length': 150, 'left_trim_length': 0, 'min_reads': 0, 'min_size': 2, 'threads_per_sample': 1, 'keep_tmp_files': True, 'log_level': 2, 'log_file': '/mnt/hpccs01/work/microbiome/users/r_nurdiansyah/wagtail/testing/0_pipeline/deblur.log', 'jobs_to_start': 1, 'is_worker_thread': False, 'logger': <Logger __main__ (INFO)>}
+WARNING(47564344814528)2024-10-25 11:43:17,180:parameters: {'seqs_fp': '/data1/pbs.11577178.pbs/qiime2/n11702427/data/0ff76180-9581-43e6-b332-63012eea8baf/data', 'output_dir': '/data1/pbs.11577178.pbs/tmpbrez22ps', 'pos_ref_fp': (), 'pos_ref_db_fp': (), 'neg_ref_fp': (), 'neg_ref_db_fp': (), 'overwrite': True, 'mean_error': 0.005, 'error_dist': [1.0, 0.06, 0.02, 0.02, 0.01, 0.005, 0.005, 0.005, 0.001, 0.001, 0.001, 0.0005], 'indel_prob': 0.01, 'indel_max': 3, 'trim_length': 150, 'left_trim_length': 0, 'min_reads': 0, 'min_size': 2, 'threads_per_sample': 1, 'keep_tmp_files': True, 'log_level': 2, 'log_file': '/mnt/hpccs01/work/microbiome/users/r_nurdiansyah/wagtail/testing/0_pipeline/deblur.log', 'jobs_to_start': 1, 'is_worker_thread': False, 'logger': <Logger __main__ (INFO)>}
+INFO(47647370787776)2024-10-25 11:43:17,181:error_dist is : [1.0, 0.06, 0.02, 0.02, 0.01, 0.005, 0.005, 0.005, 0.001, 0.001, 0.001, 0.0005]
+INFO(47564344814528)2024-10-25 11:43:17,182:error_dist is : [1.0, 0.06, 0.02, 0.02, 0.01, 0.005, 0.005, 0.005, 0.001, 0.001, 0.001, 0.0005]
+INFO(47647370787776)2024-10-25 11:43:17,183:deblur main program started
+INFO(47564344814528)2024-10-25 11:43:17,184:deblur main program started
+INFO(47647370787776)2024-10-25 11:43:17,185:processing directory /data1/pbs.11577179.pbs/qiime2/n11702427/data/91d283dc-a1d8-420d-a4d4-65a995601e9f/data
+INFO(47564344814528)2024-10-25 11:43:17,186:processing directory /data1/pbs.11577178.pbs/qiime2/n11702427/data/0ff76180-9581-43e6-b332-63012eea8baf/data
+INFO(47647370787776)2024-10-25 11:43:17,188:building negative db sortmerna index files
+INFO(47647370787776)2024-10-25 11:43:17,189:build_index_sortmerna files ['/mnt/hpccs01/work/microbiome/users/r_nurdiansyah/wagtail/testing/0_pipeline/.snakemake/conda/72d8b46582f874ea1045c49cc9fc9850_/lib/python3.8/site-packages/deblur/support_files/artifacts.fa'] to dir /data1/pbs.11577179.pbs/tmp3tn3866g/deblur_working_dir
+INFO(47564344814528)2024-10-25 11:43:17,189:building negative db sortmerna index files
+INFO(47564344814528)2024-10-25 11:43:17,231:build_index_sortmerna files ['/mnt/hpccs01/work/microbiome/users/r_nurdiansyah/wagtail/testing/0_pipeline/.snakemake/conda/72d8b46582f874ea1045c49cc9fc9850_/lib/python3.8/site-packages/deblur/support_files/artifacts.fa'] to dir /data1/pbs.11577178.pbs/tmpbrez22ps/deblur_working_dir
+INFO(47647370787776)2024-10-25 11:43:17,356:building positive db sortmerna index files
+INFO(47647370787776)2024-10-25 11:43:17,373:build_index_sortmerna files ['/mnt/hpccs01/work/microbiome/users/r_nurdiansyah/wagtail/testing/0_pipeline/.snakemake/conda/72d8b46582f874ea1045c49cc9fc9850_/lib/python3.8/site-packages/deblur/support_files/88_otus.fasta'] to dir /data1/pbs.11577179.pbs/tmp3tn3866g/deblur_working_dir
+INFO(47564344814528)2024-10-25 11:43:17,396:building positive db sortmerna index files
+INFO(47564344814528)2024-10-25 11:43:17,397:build_index_sortmerna files ['/mnt/hpccs01/work/microbiome/users/r_nurdiansyah/wagtail/testing/0_pipeline/.snakemake/conda/72d8b46582f874ea1045c49cc9fc9850_/lib/python3.8/site-packages/deblur/support_files/88_otus.fasta'] to dir /data1/pbs.11577178.pbs/tmpbrez22ps/deblur_working_dir
+INFO(47564344814528)2024-10-25 11:44:06,589:processing per sample fasta files
+INFO(47564344814528)2024-10-25 11:44:06,589:--------------------------------------------------------
+INFO(47564344814528)2024-10-25 11:44:06,589:launch_workflow for file /data1/pbs.11577178.pbs/qiime2/n11702427/data/0ff76180-9581-43e6-b332-63012eea8baf/data/ERR4994173_0_L001_R1_001.fastq.gz
+INFO(47647370787776)2024-10-25 11:44:07,713:processing per sample fasta files
+INFO(47647370787776)2024-10-25 11:44:07,730:--------------------------------------------------------
+INFO(47647370787776)2024-10-25 11:44:07,731:launch_workflow for file /data1/pbs.11577179.pbs/qiime2/n11702427/data/91d283dc-a1d8-420d-a4d4-65a995601e9f/data/ERR4994169_0_L001_R1_001.fastq.gz
+INFO(47647370787776)2024-10-25 11:44:11,756:dereplicate seqs file /data1/pbs.11577179.pbs/tmp3tn3866g/deblur_working_dir/ERR4994169_0_L001_R1_001.fastq.gz.trim
+INFO(47647370787776)2024-10-25 11:44:11,908:remove_artifacts_seqs file /data1/pbs.11577179.pbs/tmp3tn3866g/deblur_working_dir/ERR4994169_0_L001_R1_001.fastq.gz.trim.derep
+INFO(47647370787776)2024-10-25 11:44:12,718:total sequences 791, passing sequences 791, failing sequences 0
+INFO(47647370787776)2024-10-25 11:44:12,719:multiple_sequence_alignment seqs file /data1/pbs.11577179.pbs/tmp3tn3866g/deblur_working_dir/ERR4994169_0_L001_R1_001.fastq.gz.trim.derep.no_artifacts
+INFO(47564344814528)2024-10-25 11:44:13,342:dereplicate seqs file /data1/pbs.11577178.pbs/tmpbrez22ps/deblur_working_dir/ERR4994173_0_L001_R1_001.fastq.gz.trim
+INFO(47564344814528)2024-10-25 11:44:13,413:remove_artifacts_seqs file /data1/pbs.11577178.pbs/tmpbrez22ps/deblur_working_dir/ERR4994173_0_L001_R1_001.fastq.gz.trim.derep
+INFO(47564344814528)2024-10-25 11:44:14,209:total sequences 1102, passing sequences 1100, failing sequences 2
+INFO(47564344814528)2024-10-25 11:44:14,209:multiple_sequence_alignment seqs file /data1/pbs.11577178.pbs/tmpbrez22ps/deblur_working_dir/ERR4994173_0_L001_R1_001.fastq.gz.trim.derep.no_artifacts
+INFO(47647370787776)2024-10-25 11:44:15,213:deblurring 791 sequences
+INFO(47647370787776)2024-10-25 11:44:16,688:373 unique sequences left following deblurring
+INFO(47647370787776)2024-10-25 11:44:16,692:remove_chimeras_denovo_from_seqs seqs file /data1/pbs.11577179.pbs/tmp3tn3866g/deblur_working_dir/ERR4994169_0_L001_R1_001.fastq.gz.trim.derep.no_artifacts.msa.deblurto working dir /data1/pbs.11577179.pbs/tmp3tn3866g/deblur_working_dir
+INFO(47647370787776)2024-10-25 11:44:16,863:finished processing file
+INFO(47647370787776)2024-10-25 11:44:16,864:finished processing per sample fasta files
+INFO(47647370787776)2024-10-25 11:44:16,865:create_otu_table for 1 samples, into output table /data1/pbs.11577179.pbs/tmp3tn3866g/all.biom
+INFO(47647370787776)2024-10-25 11:44:16,887:for output biom table loaded 1 samples, 331 unique sequences
+INFO(47647370787776)2024-10-25 11:44:17,049:saved to biom file /data1/pbs.11577179.pbs/tmp3tn3866g/all.biom
+INFO(47647370787776)2024-10-25 11:44:17,050:saved sequence fasta file to /data1/pbs.11577179.pbs/tmp3tn3866g/all.seqs.fa
+INFO(47647370787776)2024-10-25 11:44:17,050:getting 16s sequences from the biom table
+INFO(47647370787776)2024-10-25 11:44:17,050:remove_artifacts_seqs file /data1/pbs.11577179.pbs/tmp3tn3866g/all.seqs.fa
+INFO(47564344814528)2024-10-25 11:44:17,067:deblurring 1100 sequences
+INFO(47564344814528)2024-10-25 11:44:19,677:489 unique sequences left following deblurring
+INFO(47564344814528)2024-10-25 11:44:19,682:remove_chimeras_denovo_from_seqs seqs file /data1/pbs.11577178.pbs/tmpbrez22ps/deblur_working_dir/ERR4994173_0_L001_R1_001.fastq.gz.trim.derep.no_artifacts.msa.deblurto working dir /data1/pbs.11577178.pbs/tmpbrez22ps/deblur_working_dir
+INFO(47564344814528)2024-10-25 11:44:19,912:finished processing file
+INFO(47564344814528)2024-10-25 11:44:19,913:finished processing per sample fasta files
+INFO(47564344814528)2024-10-25 11:44:19,914:create_otu_table for 1 samples, into output table /data1/pbs.11577178.pbs/tmpbrez22ps/all.biom
+INFO(47564344814528)2024-10-25 11:44:19,943:for output biom table loaded 1 samples, 446 unique sequences
+INFO(47564344814528)2024-10-25 11:44:20,017:saved to biom file /data1/pbs.11577178.pbs/tmpbrez22ps/all.biom
+INFO(47564344814528)2024-10-25 11:44:20,017:saved sequence fasta file to /data1/pbs.11577178.pbs/tmpbrez22ps/all.seqs.fa
+INFO(47564344814528)2024-10-25 11:44:20,018:getting 16s sequences from the biom table
+INFO(47564344814528)2024-10-25 11:44:20,018:remove_artifacts_seqs file /data1/pbs.11577178.pbs/tmpbrez22ps/all.seqs.fa
+INFO(47647370787776)2024-10-25 11:44:21,960:total sequences 331, passing sequences 330, failing sequences 1
+INFO(47647370787776)2024-10-25 11:44:22,076:wrote artifact only filtered biom table to /data1/pbs.11577179.pbs/tmp3tn3866g/reference-non-hit.biom
+INFO(47647370787776)2024-10-25 11:44:22,076:saved biom table sequences to fasta file /data1/pbs.11577179.pbs/tmp3tn3866g/reference-non-hit.seqs.fa
+INFO(47647370787776)2024-10-25 11:44:22,088:wrote 16s filtered biom table to /data1/pbs.11577179.pbs/tmp3tn3866g/reference-hit.biom
+INFO(47647370787776)2024-10-25 11:44:22,090:saved biom table sequences to fasta file /data1/pbs.11577179.pbs/tmp3tn3866g/reference-hit.seqs.fa
+INFO(47647370787776)2024-10-25 11:44:22,090:Keeping temp files
+INFO(47647370787776)2024-10-25 11:44:22,090:deblur workflow finished
+INFO(47647370787776)2024-10-25 11:44:22,090:output saved to /data1/pbs.11577179.pbs/tmp3tn3866g/all.biom
+INFO(47647370787776)2024-10-25 11:44:22,090:------------------
+INFO(47564344814528)2024-10-25 11:44:25,088:total sequences 446, passing sequences 444, failing sequences 2
+INFO(47564344814528)2024-10-25 11:44:25,123:wrote artifact only filtered biom table to /data1/pbs.11577178.pbs/tmpbrez22ps/reference-non-hit.biom
+INFO(47564344814528)2024-10-25 11:44:25,123:saved biom table sequences to fasta file /data1/pbs.11577178.pbs/tmpbrez22ps/reference-non-hit.seqs.fa
+INFO(47564344814528)2024-10-25 11:44:25,136:wrote 16s filtered biom table to /data1/pbs.11577178.pbs/tmpbrez22ps/reference-hit.biom
+INFO(47564344814528)2024-10-25 11:44:25,137:saved biom table sequences to fasta file /data1/pbs.11577178.pbs/tmpbrez22ps/reference-hit.seqs.fa
+INFO(47564344814528)2024-10-25 11:44:25,138:Keeping temp files
+INFO(47564344814528)2024-10-25 11:44:25,138:deblur workflow finished
+INFO(47564344814528)2024-10-25 11:44:25,138:output saved to /data1/pbs.11577178.pbs/tmpbrez22ps/all.biom
+INFO(47564344814528)2024-10-25 11:44:25,138:------------------
