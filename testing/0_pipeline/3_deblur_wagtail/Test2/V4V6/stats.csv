@@ -1,0 +1,2 @@
+sample-id,reads-raw,unique-reads-derep,reads-derep,unique-reads-deblur,reads-deblur,unique-reads-hit-artifact,reads-hit-artifact,unique-reads-chimeric,reads-chimeric,unique-reads-hit-reference,reads-hit-reference,unique-reads-missed-reference,reads-missed-reference
+V4V6,67829,3862,48438,345,22559,0,0,132,1044,212,21511,1,4

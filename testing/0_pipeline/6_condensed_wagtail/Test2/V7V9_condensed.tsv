@@ -1,0 +1,14 @@
+sample	coverage	taxonomy
+V7V9	5806.0	Root; d__Bacteria; p__Proteobacteria; c__Gammaproteobacteria; o__Enterobacterales; f__Pasteurellaceae; g__Haemophilus; s__Haemophilus_parainfluenzae
+V7V9	2271.0	Root; d__Bacteria; p__Firmicutes; c__Bacilli; o__Lactobacillales; f__Listeriaceae; g__Listeria; s__MFD_s_286000
+V7V9	2230.0	Root; d__Bacteria; p__Firmicutes; c__Bacilli; o__Lactobacillales; f__Enterococcaceae; g__Enterococcus; s__Enterococcus_faecalis
+V7V9	2009.0	Root; d__Bacteria; p__Firmicutes; c__Bacilli; o__Staphylococcales; f__Staphylococcaceae; g__Staphylococcus; s__MFD_s_126847
+V7V9	1418.0	Root; d__Bacteria; p__Proteobacteria; c__Gammaproteobacteria; o__Pseudomonadales; f__Pseudomonadaceae; g__Pseudomonas; s__Pseudomonas_aeruginosa
+V7V9	1280.0	Root; d__Bacteria; p__Firmicutes; c__Bacilli; o__Bacillales; f__Bacillaceae; g__Bacillus; s__MFD_s_2311
+V7V9	1122.0	Root; d__Bacteria; p__Firmicutes; c__Bacilli; o__Lactobacillales; f__Lactobacillaceae; g__Limosilactobacillus; s__Lactobacillus_fermentum
+V7V9	487.0	Root; d__Bacteria; p__Firmicutes; c__Bacilli; o__Bacillales; f__Bacillaceae; g__Bacillus; s__MFD_s_785900
+V7V9	3.0	Root; d__Bacteria; p__Firmicutes; c__Bacilli; o__Lactobacillales; f__Enterococcaceae; g__Enterococcus; s__MFD_s_928429
+V7V9	2.0	Root; d__Bacteria; p__Firmicutes; c__Bacilli; o__Staphylococcales; f__Staphylococcaceae; g__Staphylococcus; s__MFD_s_901247
+V7V9	2.0	Root; d__Bacteria; p__Proteobacteria; c__Gammaproteobacteria; o__Pseudomonadales; f__Moraxellaceae; g__Acinetobacter; s__MFD_s_22294
+V7V9	1.0	Root; d__Bacteria; p__Firmicutes; c__Bacilli; o__Bacillales; f__Bacillaceae; g__Bacillus; s__MFD_s_24189
+V7V9	1.0	Root; d__Bacteria; p__Firmicutes; c__Bacilli; o__Lactobacillales; f__Listeriaceae; g__Listeria; s__Listeria_booriae

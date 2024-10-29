@@ -1,0 +1,2 @@
+sample-id,total-input-reads,total-retained-reads,reads-truncated,reads-too-short-after-truncation,reads-exceeding-maximum-ambiguous-bases
+V7V9,52548,52486,14,14,48
