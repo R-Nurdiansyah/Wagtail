@@ -6,8 +6,7 @@ def create_filemap(input, output_filemap, output_accession):
     with open(output_filemap, "w") as f_map, open(output_accession, "w") as f_acc:
         for filename in os.listdir(input):
             if os.path.isfile(os.path.join(input, filename)):
-                #name_without_ext = os.path.splitext(filename)[0]  # Nama file tanpa ekstensi
-                name_without_ext = filename.split(".")[0]  # Nama file tanpa ekstensi
+                name_without_ext = filename.split(".")[0]  # File name without extension
                 absolute_path = os.path.abspath(os.path.join(input, filename))  # Absolute path
                 f_map.write(f"{name_without_ext}\t{absolute_path}\n")
                 f_acc.write(f"{name_without_ext}\n")
