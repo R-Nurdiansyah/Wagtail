@@ -40,7 +40,9 @@ rule manifest:
         output_dir = directory(f"{run_dir}/{run_name}/0_manifest/{{filename}}"),
         manifest = f"{run_dir}/{run_name}/0_manifest/{{filename}}/{{filename}}_manifest.csv"
     wildcard_constraints:
-        filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard 
+        filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
+    group:
+        "initialization"
     params:
         #defining the used script for this rule
         script = f"{script_dir}/create_manifest_wagtail.py",
@@ -67,7 +69,9 @@ rule qiime2_import: #read the data inside the directory
     output:
         f"{run_dir}/{run_name}/1_import_wagtail/{{filename}}-single.qza"
     wildcard_constraints:
-        filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard 
+        filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
+    group:
+        "initialization"
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -151,7 +155,7 @@ rule export_seqs:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard 
     group:
-        "mappy alignment"
+        "mappy_alignment"
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     params:
@@ -183,7 +187,7 @@ rule mappy:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
-        "mappy alignment"
+        "mappy_alignment" #make sure no whitespace
     conda:
         "envs/mappy.yaml"
     params:
@@ -215,7 +219,7 @@ rule export_table:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
-        "table creation"
+        "table_creation"
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     params:
@@ -247,7 +251,7 @@ rule biom_to_tsv:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
-        "table creation"
+        "table_creation"
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -271,7 +275,7 @@ rule edit_table:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
-        "table creation"
+        "table_creation"
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -309,7 +313,7 @@ rule extract_taxonomy:
     threads:
         1
     resources:
-        mem_mb = 16000,
+        mem_mb = 32000,
         runtime = "96h"
     shell:
         "(python {params.script} -i {input.primary} "
@@ -330,7 +334,7 @@ rule qiime_stats:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
-        "metadata creation"
+        "metadatas"
     params:
         #defining the used script for this rule
         script = f"{script_dir}/wagtail_metadata-qiimes.py"
@@ -361,7 +365,7 @@ rule metadata_creation:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
-        "metadata creation"
+        "metadatas"
     params:
         #defining the used script for this rule
         script = f"{script_dir}/wagtail_metadata-meta-combine.py",
@@ -390,6 +394,8 @@ rule metadata_combine:
         f"{run_dir}/{run_name}/7_metadata/full_metadata.tsv"
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
+    group:
+        "metadatas"
     conda:
         "envs/mappy.yaml"
     log:
