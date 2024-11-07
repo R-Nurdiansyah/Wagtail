@@ -7,6 +7,12 @@ dist
 *.pyc
 target
 work
-*.nextflow*.vscode
+*.nextflow*
+.vscode
 *.tmp
 *.mmi
+0_run/
+*.snakemake*
+.log
+*.ipnyb
+0_data/
