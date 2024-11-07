@@ -412,6 +412,8 @@ rule metadata_combine:
         f"{run_dir}/{run_name}/7_metadata/full_metadata.tsv"
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
+    group:
+        "metadatas"
     conda:
         "envs/mappy.yaml"
     log:
