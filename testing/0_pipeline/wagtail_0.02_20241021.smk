@@ -48,7 +48,7 @@ rule manifest:
         #defining the used script for this rule
         script = f"{script_dir}/create_manifest_wagtail.py",
         sample = "{filename}",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/{Rule}_status.log"
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_status.log" # To store any error within the pipeline
     conda:
         "envs/mappy.yaml"
     log:
@@ -62,7 +62,7 @@ rule manifest:
         runtime = "96h"
     shell:
         "(python {params.script} --input {params.sample} --file-map {input.filemap} "
-        "--output {output.output_dir}| touch {output.manifest}) 2> {log} || echo '{wildcards.filename} Error' >> {params.error_log}"
+        "--output {output.output_dir}| touch {output.manifest}) 2> {log} || echo '{wildcards.filename} Error at manifest' >> {params.error_log}"
    
 rule qiime2_import: #read the data inside the directory
 #import data using manifest into qiime2 artifact and single end data only
@@ -75,7 +75,7 @@ rule qiime2_import: #read the data inside the directory
     group:
         "initialization"
     params:
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/{Rule}_status.log"
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_status.log"
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -92,7 +92,7 @@ rule qiime2_import: #read the data inside the directory
         "(qiime tools import --type 'SampleData[SequencesWithQuality]' "
         "--input-path {input.manifest} "
         "--input-format SingleEndFastqManifestPhred33 "
-        "--output-path {output}) 2> {log} || echo '{wildcards.filename} Error' >> {params.error_log}"
+        "--output-path {output}) 2> {log} || echo '{wildcards.filename} Error at qiime_import' >> {params.error_log}"
 
 rule quality_control:
     #run the quality control using qiime2 quality-filter q-score
@@ -104,7 +104,7 @@ rule quality_control:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     params:
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/{Rule}_status.log"
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_status.log"
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -118,7 +118,7 @@ rule quality_control:
         runtime = "96h"
     shell:
         "(qiime quality-filter q-score --i-demux {input} "
-        "--o-filtered-sequences {output.filtered} --o-filter-stats {output.stats}) 2> {log} || echo '{wildcards.filename} Error' >> {params.error_log}"
+        "--o-filtered-sequences {output.filtered} --o-filter-stats {output.stats}) 2> {log} || echo '{wildcards.filename} Error at quality_control' >> {params.error_log}"
 
 rule deblur:
 #demultiplex the data to get the representative sequences, OTU table, and denoising stats
@@ -132,7 +132,7 @@ rule deblur:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     params:
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/{Rule}_status.log"
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_status.log"
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -146,12 +146,12 @@ rule deblur:
         runtime = "96h"
     shell:
         "(qiime deblur denoise-16S --i-demultiplexed-seqs {input} "
-        #"--p-trim-length -1 --p-sample-stats "
-        "--p-trim-length 150 --p-sample-stats "
+        "--p-trim-length -1 --p-sample-stats "
+        #"--p-trim-length 150 --p-sample-stats "
         "--p-min-reads 0 "
         "--o-representative-sequences {output.representative} " 
         "--o-table {output.table} " 
-        "--o-stats {output.stats}) 2> {log} || echo '{wildcards.filename} Error' >> {params.error_log}"
+        "--o-stats {output.stats}) 2> {log} || echo '{wildcards.filename} Error at deblur' >> {params.error_log}"
 
 rule export_seqs:
 #export the biom table from the abundance table using the custom script
@@ -169,7 +169,7 @@ rule export_seqs:
     params:
         #defining the used script for this rule
         script = f"{script_dir}/qiime2_seqs_export.py",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/{Rule}_status.log"
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_status.log"
     log:
         f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/export_seqs.log"
     benchmark:
@@ -181,7 +181,7 @@ rule export_seqs:
         runtime = "96h"
     shell:
         "(python {params.script} --input-path {input.representative} "
-        "--output-path {output.output}) 2> {log} || echo '{wildcards.filename} Error' >> {params.error_log}"
+        "--output-path {output.output}) 2> {log} || echo '{wildcards.filename} Error at export_seqs' >> {params.error_log}"
 
 rule mappy:
 #use mappy script in version 0.03
@@ -203,7 +203,7 @@ rule mappy:
         #defining the used script for this rule
         script = f"{script_dir}/mappy_script.py",
         sample = "{filename}",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/{Rule}_status.log"
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_status.log"
     log:
         f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/mappy.log"
         #log and benchmark files are located in 0_logs folder and the subdirectory with user-defined name
@@ -217,7 +217,7 @@ rule mappy:
     shell:
         "(python {params.script} -i {input.F} "
         "-r {input.ref} -a {output.align} -m {output.meta} "
-        "-s {params.sample}) 2> {log} || echo '{wildcards.filename} Error' >> {params.error_log}"
+        "-s {params.sample}) 2> {log} || echo '{wildcards.filename} Error at mappy' >> {params.error_log}"
 
 rule export_table:
 #export the biom table from the abundance table using the custom script
@@ -237,7 +237,7 @@ rule export_table:
         script = f"{script_dir}/qiime2_biom_export.py",
         #parameter to change the filename for the script
         name = "{filename}.biom",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/{Rule}_status.log"
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_status.log"
     log:
         f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/export_table.log"
     benchmark:
@@ -250,7 +250,7 @@ rule export_table:
     shell:
         "(python {params.script} --input-path {input.table} "
         "--output-path {output.output} "
-        "--new-filename {params.name}) 2> {log} || echo '{wildcards.filename} Error' >> {params.error_log}"
+        "--new-filename {params.name}) 2> {log} || echo '{wildcards.filename} Error at export_table' >> {params.error_log}"
 
 rule biom_to_tsv:
 #convert the biom table to tsv table
@@ -264,7 +264,7 @@ rule biom_to_tsv:
     group:
         "table_creation"
     params:
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/{Rule}_status.log"
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_status.log"
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -277,7 +277,7 @@ rule biom_to_tsv:
         mem_mb = 32000,
         runtime = "96h"
     shell:
-        "(biom convert -i {input} -o {output} --to-tsv) 2> {log} || echo '{wildcards.filename} Error' >> {params.error_log}"
+        "(biom convert -i {input} -o {output} --to-tsv) 2> {log} || echo '{wildcards.filename} Error at biom_to_tsv' >> {params.error_log}"
 
 rule edit_table:
 #to edit the abundance tsv file for input in the next script, take all from 3rd lines
@@ -290,7 +290,7 @@ rule edit_table:
     group:
         "table_creation"
     params:
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/{Rule}_status.log"
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_status.log"
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -303,7 +303,7 @@ rule edit_table:
         mem_mb = 32000,
         runtime = "96h"
     shell:
-        "(tail -n +3 {input} > {output}) 2> {log} || echo '{wildcards.filename} Error' >> {params.error_log}"
+        "(tail -n +3 {input} > {output}) 2> {log} || echo '{wildcards.filename} Error at edit_table' >> {params.error_log}"
 
 rule extract_taxonomy:
 #extract taxonomy data based on the database and format the output for filling the taxonomy
@@ -319,7 +319,7 @@ rule extract_taxonomy:
         sample = "{filename}",
         #defining the used script for this rule
         script = f"{script_dir}/extract_taxonomy_danica.py",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/{Rule}_status.log"
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_status.log"
     conda:
         "envs/mappy.yaml"
     log:
@@ -335,7 +335,7 @@ rule extract_taxonomy:
         "(python {params.script} -i {input.primary} "
         "-t {input.table} "
         "-o {output} "
-        "-s {params.sample}) 2> {log} || echo '{wildcards.filename} Error' >> {params.error_log}"
+        "-s {params.sample}) 2> {log} || echo '{wildcards.filename} Error at extract_taxonomy' >> {params.error_log}"
 
 rule qiime_stats:
 #wrote the metadata for the run
@@ -354,7 +354,7 @@ rule qiime_stats:
     params:
         #defining the used script for this rule
         script = f"{script_dir}/wagtail_metadata-qiimes.py",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/{Rule}_status.log"
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_status.log"
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -368,7 +368,7 @@ rule qiime_stats:
         runtime = "96h"
     shell:
         "(python {params.script} --input-qc {input.qc} --output-qc {output.qc_dir} "
-        "--input-deblur {input.deblur} --output-deblur {output.deblur_dir}) 2> {log} || echo '{wildcards.filename} Error' >> {params.error_log}"
+        "--input-deblur {input.deblur} --output-deblur {output.deblur_dir}) 2> {log} || echo '{wildcards.filename} Error at qiime_stats' >> {params.error_log}"
 
 rule metadata_creation:
 #wrote the metadata for the run
@@ -387,7 +387,7 @@ rule metadata_creation:
         #defining the used script for this rule
         script = f"{script_dir}/wagtail_metadata-meta-combine.py",
         run = "{filename}",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/{Rule}_{Rule}_status.log"
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_status.log"
     conda:
         "envs/mappy.yaml"
     log:
@@ -402,7 +402,7 @@ rule metadata_creation:
     shell:
         "(python {params.script} --qc-file {input.final_qc} --deblur-file {input.final_deblur} "
         "--mappy-file {input.final_mappy} --output-path {output.directory} "
-        "--run-name {params.run}) 2> {log} || echo '{wildcards.filename} Error' >> {params.error_log}"
+        "--run-name {params.run}) 2> {log} || echo '{wildcards.filename} Error at metadata' >> {params.error_log}"
 
 rule metadata_combine:
 #combine all metadata files into one
