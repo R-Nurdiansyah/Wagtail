@@ -26,9 +26,9 @@ def process_alignment(input, reference, alignment_output, metadata_output, sampl
                 result_per_i[name] = (hits.ctg)
                 alignment_counter['mapped'] += 1
                 total_mapq += hits.mapq
-                break # Only consider primary alignment
-            else:
+            elif hits.ctg is None:
                 alignment_counter['unmapped'] += 1
+        #else non primaru but mapped to something else (secondary, supplementary)
         
     #record the ctg_counts dictionary to a tsv file using polars
     df = pl.from_dict(result_per_i)
