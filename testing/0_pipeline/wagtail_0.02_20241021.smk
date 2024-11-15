@@ -385,7 +385,7 @@ rule metadata_creation:
         "metadatas"
     params:
         #defining the used script for this rule
-        script = f"{script_dir}/wagtail_metadata-meta-combine.py",
+        script = f"{script_dir}/wagtail_metadata_meta_combine.py",
         run = "{filename}",
         error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_status.log"
     conda:
