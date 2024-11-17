@@ -16,7 +16,7 @@ jobs:
       - uses: conda-incubator/setup-miniconda@v2.2.0
         with:
           activate-environment: test
-          environment-file: 0_pipeline/envs/mappy.yaml
+          environment-file: testing/0_pipeline/envs/mappy.yaml
           python-version: 3.9 # 3.10 fails to setup environment
           # auto-activate-base: false
           # mamba-version: "*" # Appears to be broken as of writing.
