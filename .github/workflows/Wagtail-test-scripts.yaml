@@ -24,8 +24,8 @@ jobs:
       - run: |
           conda info
           conda list
-      - run: |
-          pip install -e .
+      #- run: |
+      #    pip install -e .
       - name: Run pytest
         run: |
-          python -m unittest discover -s 0_test -p '*_test.py'
+          python -m unittest discover -s testing/0_test -p '*_test.py'
