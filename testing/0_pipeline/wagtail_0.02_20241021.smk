@@ -38,8 +38,8 @@ rule manifest:
         filemap = config["file_map"]
     output:
         #create manifest file for each accession in the data_dir
-        output_dir = directory(f"{run_dir}/{run_name}/0_manifest/{{filename}}"),
-        manifest = f"{run_dir}/{run_name}/0_manifest/{{filename}}/{{filename}}_manifest.csv"
+        output_dir = temp(directory(f"{run_dir}/{run_name}/0_manifest/{{filename}}")),
+        manifest = temp(f"{run_dir}/{run_name}/0_manifest/{{filename}}/{{filename}}_manifest.csv")
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
@@ -69,7 +69,7 @@ rule qiime2_import: #read the data inside the directory
     input:
         manifest = f"{run_dir}/{run_name}/0_manifest/{{filename}}/{{filename}}_manifest.csv"
     output:
-        f"{run_dir}/{run_name}/1_import_wagtail/{{filename}}-single.qza"
+        temp(f"{run_dir}/{run_name}/1_import_wagtail/{{filename}}-single.qza")
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
@@ -99,8 +99,8 @@ rule quality_control:
     input: 
         f"{run_dir}/{run_name}/1_import_wagtail/{{filename}}-single.qza"
     output: 
-        filtered = f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}-filtered.qza",
-        stats = f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}-qc-stats.qza"
+        filtered = temp(f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}-filtered.qza"),
+        stats = temp(f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}-qc-stats.qza")
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     params:
@@ -126,9 +126,9 @@ rule deblur:
     input: 
         f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}-filtered.qza"
     output: 
-        representative = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-rep-seqs.qza",
-        table = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-table.qza",
-        stats = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-deblur-stats.qza"
+        representative = temp(f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-rep-seqs.qza"),
+        table = temp(f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-table.qza"),
+        stats = temp(f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-deblur-stats.qza")
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     params:
@@ -158,8 +158,8 @@ rule export_seqs:
     input: 
         representative = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-rep-seqs.qza"
     output:
-        output = directory(f"{run_dir}/{run_name}/4_rep_seqs_wagtail/{{filename}}"),
-        final = f"{run_dir}/{run_name}/4_rep_seqs_wagtail/{{filename}}/dna-sequences.fasta"
+        output = temp(directory(f"{run_dir}/{run_name}/4_rep_seqs_wagtail/{{filename}}")),
+        final = temp(f"{run_dir}/{run_name}/4_rep_seqs_wagtail/{{filename}}/dna-sequences.fasta")
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard 
     group:
@@ -191,8 +191,8 @@ rule mappy:
     #this rule is dependent on the reference being loaded
         ref = f"{db_dir}/danica.mmi"
     output:
-        align = f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_alignment.tsv",
-        meta = f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_metadata.tsv"
+        align = temp(f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_alignment.tsv"),
+        meta = temp(f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_metadata.tsv")
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
@@ -224,8 +224,8 @@ rule export_table:
     input: 
         table = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-table.qza"
     output:
-        output = directory(f"{run_dir}/{run_name}/4_table_wagtail/{{filename}}_biom"),
-        final = f"{run_dir}/{run_name}/4_table_wagtail/{{filename}}_biom/{{filename}}.biom"
+        output = temp(directory(f"{run_dir}/{run_name}/4_table_wagtail/{{filename}}_biom")),
+        final = temp(f"{run_dir}/{run_name}/4_table_wagtail/{{filename}}_biom/{{filename}}.biom")
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
@@ -258,7 +258,7 @@ rule biom_to_tsv:
     #check the directory from the previous rule and read the biom table inside
         f"{run_dir}/{run_name}/4_table_wagtail/{{filename}}_biom/{{filename}}.biom"
     output: 
-        f"{run_dir}/{run_name}/4_table_wagtail/{{filename}}_table.tsv"
+        temp(f"{run_dir}/{run_name}/4_table_wagtail/{{filename}}_table.tsv")
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
@@ -284,7 +284,7 @@ rule edit_table:
     input: 
         f"{run_dir}/{run_name}/4_table_wagtail/{{filename}}_table.tsv"
     output: 
-        f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_table_edit.tsv"
+        temp(f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_table_edit.tsv")
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
@@ -343,17 +343,17 @@ rule qiime_stats:
         qc = f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}-qc-stats.qza",
         deblur = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-deblur-stats.qza"
     output: 
-        qc_dir = directory(f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}"),
-        deblur_dir = directory(f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}"),
-        final_qc = f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}/stats.csv",
-        final_deblur = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}/stats.csv"
+        qc_dir = temp(directory(f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}")),
+        deblur_dir = temp(directory(f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}")),
+        final_qc = temp(f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}/stats.csv"),
+        final_deblur = temp(f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}/stats.csv")
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
         "metadatas"
     params:
         #defining the used script for this rule
-        script = f"{script_dir}/wagtail_metadata-qiimes.py",
+        script = f"{script_dir}/wagtail_metadata_qiimes.py",
         error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_status.log"
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
