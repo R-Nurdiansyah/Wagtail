@@ -1,5 +1,0 @@
-Total Reads: 12745
-Mapped Reads: 12745
-Unmapped Reads: 0
-Mapping Percentage: 100.00%
-Average Mapping Quality: 2.84

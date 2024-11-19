@@ -11,8 +11,7 @@ work
 .vscode
 *.tmp
 *.mmi
-0_run/
 *.snakemake*
 .log
 *.ipnyb
-0_data/
+development/

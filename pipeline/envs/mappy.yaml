@@ -1,0 +1,8 @@
+name: minimap2
+channels:
+  - bioconda
+  - conda-forge
+  - nodefaults
+dependencies:
+  - mappy
+  - polars
