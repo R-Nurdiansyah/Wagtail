@@ -102,6 +102,8 @@ rule quality_control:
         stats = temp(f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}-qc-stats.qza")
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
+    group:
+        "deblur"
     params:
         error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_status.log"
     conda:
@@ -130,6 +132,8 @@ rule deblur:
         stats = temp(f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-deblur-stats.qza")
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
+    group:
+        "deblur"
     params:
         error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_status.log"
     conda:
