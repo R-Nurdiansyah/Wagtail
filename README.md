@@ -40,10 +40,14 @@ Please check the config.yaml to configure on how the Wagtail is executed:
 
 Example execution command:
 use conda, 8 cores, and edited the config file
-> snakemake --use-conda -c 8 --snakefile path/to/wagtail.smk --configfile=path/to/config.yaml
+```bash
+snakemake --use-conda -c 8 --snakefile path/to/wagtail.smk --configfile=path/to/config.yaml
+```
 
 use conda, 8 cores, and edit the config file in the terminal
-> snakemake --use-conda -c 8 --snakefile path/to/wagtail.smk --configfile=path/to/config.yaml --config run_name=user_configured_run_name file_map=path/to/filemap sample_list=path/to/sample_list
+```bash
+snakemake --use-conda -c 8 --snakefile path/to/wagtail.smk --configfile=path/to/config.yaml --config run_name=user_configured_run_name file_map=path/to/filemap sample_list=path/to/sample_list
+```
 
 If it is the first time you execute Wagtail, Snakemake will create the conda environment automatically and it will take a few minutes depending on your internet access speed and system.\
 All of the result will be saved in the run directory.
