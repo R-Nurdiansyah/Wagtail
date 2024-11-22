@@ -139,9 +139,9 @@ rule deblur:
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
-        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/qc.log"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/deblur.log"
     benchmark:
-        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/qc.benchmark.txt"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/deblur.benchmark.txt"
     threads:
         1
     resources:
