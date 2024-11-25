@@ -2,6 +2,7 @@
 
 ###tools import###
 import os
+from datetime import datetime
 
 ###data, scripts and database directory###
 parent_dir = os.path.dirname(workflow.basedir)
@@ -20,6 +21,10 @@ filename_list = config["sample_list"]
 filenames = [line.strip() for line in open(filename_list)]
 #take the run name from config.yaml
 run_name = config["run_name"]
+
+###create timestamp###
+def generate_timestamp():
+    return datetime.now().strftime('%Y%m%d_%H%M%S')
 
 ###rules###
 
@@ -47,7 +52,7 @@ rule manifest:
         #defining the used script for this rule
         script = f"{script_dir}/create_manifest_wagtail.py",
         sample = "{filename}",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_status.log" # To store any error within the pipeline
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{generate_timestamp()}_status.log" # To store any error within the pipeline
     conda:
         "envs/mappy.yaml"
     log:
@@ -74,7 +79,7 @@ rule qiime2_import: #read the data inside the directory
     group:
         "initialization"
     params:
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_status.log"
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{generate_timestamp()}_status.log" # To store any error within the pipeline
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -105,7 +110,7 @@ rule quality_control:
     group:
         "deblur"
     params:
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_status.log"
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{generate_timestamp()}_status.log" # To store any error within the pipeline
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -135,7 +140,7 @@ rule deblur:
     group:
         "deblur"
     params:
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_status.log"
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{generate_timestamp()}_status.log" # To store any error within the pipeline
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -172,7 +177,7 @@ rule export_seqs:
     params:
         #defining the used script for this rule
         script = f"{script_dir}/qiime2_seqs_export.py",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_status.log"
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{generate_timestamp()}_status.log" # To store any error within the pipeline
     log:
         f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/export_seqs.log"
     benchmark:
@@ -206,7 +211,7 @@ rule mappy:
         #defining the used script for this rule
         script = f"{script_dir}/mappy_script.py",
         sample = "{filename}",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_status.log"
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{generate_timestamp()}_status.log" # To store any error within the pipeline
     log:
         f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/mappy.log"
         #log and benchmark files are located in 0_logs folder and the subdirectory with user-defined name
@@ -240,7 +245,7 @@ rule export_table:
         script = f"{script_dir}/qiime2_biom_export.py",
         #parameter to change the filename for the script
         name = "{filename}.biom",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_status.log"
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{generate_timestamp()}_status.log" # To store any error within the pipeline
     log:
         f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/export_table.log"
     benchmark:
@@ -267,7 +272,7 @@ rule biom_to_tsv:
     group:
         "table_creation"
     params:
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_status.log"
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{generate_timestamp()}_status.log" # To store any error within the pipeline
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -293,7 +298,7 @@ rule edit_table:
     group:
         "table_creation"
     params:
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_status.log"
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{generate_timestamp()}_status.log" # To store any error within the pipeline
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -322,7 +327,7 @@ rule extract_taxonomy:
         sample = "{filename}",
         #defining the used script for this rule
         script = f"{script_dir}/extract_taxonomy_danica.py",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_status.log"
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{generate_timestamp()}_status.log" # To store any error within the pipeline
     conda:
         "envs/mappy.yaml"
     log:
@@ -357,7 +362,7 @@ rule qiime_stats:
     params:
         #defining the used script for this rule
         script = f"{script_dir}/wagtail_metadata_qiimes.py",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_status.log"
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{generate_timestamp()}_status.log" # To store any error within the pipeline
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -390,7 +395,7 @@ rule metadata_creation:
         #defining the used script for this rule
         script = f"{script_dir}/wagtail_metadata_meta_combine.py",
         run = "{filename}",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_status.log"
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{generate_timestamp()}_status.log" # To store any error within the pipeline
     conda:
         "envs/mappy.yaml"
     log:
