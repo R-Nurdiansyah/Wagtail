@@ -23,8 +23,22 @@ filenames = [line.strip() for line in open(filename_list)]
 run_name = config["run_name"]
 
 ###create timestamp###
-def generate_timestamp():
-    return datetime.now().strftime('%Y%m%d_%H%M%S')
+def generate_timestamp(run_name, log_dir="logs"):
+    #get current date
+    current_date = datetime.now().strftime('%Y%m%d')
+
+    # Ensure the log directory exists
+    os.makedirs(log_dir, exist_ok=True)
+    
+    # Get the number of logs for the current run_name and date
+    existing_logs = [
+        f for f in os.listdir(log_dir) 
+        if f.startswith(f"{run_name}_{current_date}")
+    ]
+    log_count = len(existing_logs) + 1
+
+    # Return timestamp in format run_name_YYYYMMDD_count
+    return f"{run_name}_{current_date}_{log_count}"
 
 ###rules###
 
@@ -47,12 +61,12 @@ rule manifest:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
-        "initialization"
+        "deblur"
     params:
         #defining the used script for this rule
         script = f"{script_dir}/create_manifest_wagtail.py",
         sample = "{filename}",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{generate_timestamp()}_status.log" # To store any error within the pipeline
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp(run_name, log_dir=f'{run_dir}/{run_name}/0_logs_wagtail')}_status.log" # To store any error within the pipeline
     conda:
         "envs/mappy.yaml"
     log:
@@ -76,10 +90,10 @@ rule qiime2_import: #read the data inside the directory
         temp(f"{run_dir}/{run_name}/1_import_wagtail/{{filename}}-single.qza")
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
-    group:
-        "initialization"
+     group:
+        "deblur"
     params:
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{generate_timestamp()}_status.log" # To store any error within the pipeline
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp(run_name, log_dir=f'{run_dir}/{run_name}/0_logs_wagtail')}_status.log" # To store any error within the pipeline
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -110,7 +124,7 @@ rule quality_control:
     group:
         "deblur"
     params:
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{generate_timestamp()}_status.log" # To store any error within the pipeline
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp(run_name, log_dir=f'{run_dir}/{run_name}/0_logs_wagtail')}_status.log" # To store any error within the pipeline
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -140,7 +154,7 @@ rule deblur:
     group:
         "deblur"
     params:
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{generate_timestamp()}_status.log" # To store any error within the pipeline
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp(run_name, log_dir=f'{run_dir}/{run_name}/0_logs_wagtail')}_status.log" # To store any error within the pipeline
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -171,13 +185,13 @@ rule export_seqs:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard 
     group:
-        "mappy_alignment"
+        "deblur"
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     params:
         #defining the used script for this rule
         script = f"{script_dir}/qiime2_seqs_export.py",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{generate_timestamp()}_status.log" # To store any error within the pipeline
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp(run_name, log_dir=f'{run_dir}/{run_name}/0_logs_wagtail')}_status.log" # To store any error within the pipeline
     log:
         f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/export_seqs.log"
     benchmark:
@@ -204,14 +218,14 @@ rule mappy:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
-        "mappy_alignment" #make sure no whitespace
+        "deblur" #make sure no whitespace
     conda:
          "envs/mappy.yaml"
     params:
         #defining the used script for this rule
         script = f"{script_dir}/mappy_script.py",
         sample = "{filename}",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{generate_timestamp()}_status.log" # To store any error within the pipeline
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp(run_name, log_dir=f'{run_dir}/{run_name}/0_logs_wagtail')}_status.log" # To store any error within the pipeline
     log:
         f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/mappy.log"
         #log and benchmark files are located in 0_logs folder and the subdirectory with user-defined name
@@ -237,7 +251,7 @@ rule export_table:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
-        "table_creation"
+        "deblur"
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     params:
@@ -245,7 +259,7 @@ rule export_table:
         script = f"{script_dir}/qiime2_biom_export.py",
         #parameter to change the filename for the script
         name = "{filename}.biom",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{generate_timestamp()}_status.log" # To store any error within the pipeline
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp(run_name, log_dir=f'{run_dir}/{run_name}/0_logs_wagtail')}_status.log" # To store any error within the pipeline
     log:
         f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/export_table.log"
     benchmark:
@@ -270,9 +284,9 @@ rule biom_to_tsv:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
-        "table_creation"
+        "deblur"
     params:
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{generate_timestamp()}_status.log" # To store any error within the pipeline
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp(run_name, log_dir=f'{run_dir}/{run_name}/0_logs_wagtail')}_status.log" # To store any error within the pipeline
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -296,9 +310,9 @@ rule edit_table:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
-        "table_creation"
+        "deblur"
     params:
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{generate_timestamp()}_status.log" # To store any error within the pipeline
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp(run_name, log_dir=f'{run_dir}/{run_name}/0_logs_wagtail')}_status.log" # To store any error within the pipeline
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -322,12 +336,14 @@ rule extract_taxonomy:
         f"{run_dir}/{run_name}/6_condensed_wagtail/{{filename}}_condensed.tsv"
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
+    group:
+        "deblur"
     params:
         #sample name for the extract_taxonomy.py script -> needed for the script
         sample = "{filename}",
         #defining the used script for this rule
         script = f"{script_dir}/extract_taxonomy_danica.py",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{generate_timestamp()}_status.log" # To store any error within the pipeline
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp(run_name, log_dir=f'{run_dir}/{run_name}/0_logs_wagtail')}_status.log" # To store any error within the pipeline
     conda:
         "envs/mappy.yaml"
     log:
@@ -358,11 +374,11 @@ rule qiime_stats:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
-        "metadatas"
+        "deblur"
     params:
         #defining the used script for this rule
         script = f"{script_dir}/wagtail_metadata_qiimes.py",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{generate_timestamp()}_status.log" # To store any error within the pipeline
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp(run_name, log_dir=f'{run_dir}/{run_name}/0_logs_wagtail')}_status.log" # To store any error within the pipeline
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -390,12 +406,12 @@ rule metadata_creation:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
-        "metadatas"
+        "deblur"
     params:
         #defining the used script for this rule
         script = f"{script_dir}/wagtail_metadata_meta_combine.py",
         run = "{filename}",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{generate_timestamp()}_status.log" # To store any error within the pipeline
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp(run_name, log_dir=f'{run_dir}/{run_name}/0_logs_wagtail')}_status.log" # To store any error within the pipeline
     conda:
         "envs/mappy.yaml"
     log:
@@ -421,7 +437,7 @@ rule metadata_combine:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
-        "metadatas"
+        "deblur"
     conda:
         "envs/mappy.yaml"
     log:
