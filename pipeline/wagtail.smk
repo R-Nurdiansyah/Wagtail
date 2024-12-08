@@ -23,24 +23,13 @@ filenames = [line.strip() for line in open(filename_list)]
 run_name = config["run_name"]
 
 ###create timestamp###
-def generate_timestamp(run_name, log_dir="logs"):
+def generate_timestamp():
     #get current date
-    current_date = datetime.now().strftime('%Y%m%d')
-
-    # Ensure the log directory exists
-    os.makedirs(log_dir, exist_ok=True)
-    
-    # Get the number of logs for the current run_name and date
-    existing_logs = [
-        f for f in os.listdir(log_dir) 
-        if f.startswith(f"{run_name}_{current_date}")
-    ]
-    log_count = len(existing_logs) + 1
-
-    # Return timestamp in format run_name_YYYYMMDD_count
-    return f"{run_name}_{current_date}_{log_count}"
+    return datetime.now().strftime('%Y%m%d')
 
 ###rules###
+#set localrules to run in the local machine
+localrules: manifest, qiime2_import, export_table, biom_to_tsv, edit_table, extract_taxonomy, qiime_stats, metadata_creation, metadata_combine
 
 #rule all to run all the rules at once
 rule all:
@@ -61,12 +50,12 @@ rule manifest:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
-        "deblur"
+        "local"
     params:
         #defining the used script for this rule
         script = f"{script_dir}/create_manifest_wagtail.py",
         sample = "{filename}",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp(run_name, log_dir=f'{run_dir}/{run_name}/0_logs_wagtail')}_status.log" # To store any error within the pipeline
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp()}_status.log" # To store any error within the pipeline
     conda:
         "envs/mappy.yaml"
     log:
@@ -76,8 +65,8 @@ rule manifest:
     threads:
         1
     resources:
-        mem_mb = 32000,
-        runtime = "96h"
+        mem_mb = 320,
+        runtime = "4h"
     shell:
         "(python {params.script} --input {params.sample} --file-map {input.filemap} "
         "--output {output.output_dir}| touch {output.manifest}) 2> {log} || echo '{wildcards.filename} Error at manifest' >> {params.error_log}"
@@ -90,10 +79,10 @@ rule qiime2_import: #read the data inside the directory
         temp(f"{run_dir}/{run_name}/1_import_wagtail/{{filename}}-single.qza")
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
-     group:
-        "deblur"
+    group:
+        "local"
     params:
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp(run_name, log_dir=f'{run_dir}/{run_name}/0_logs_wagtail')}_status.log" # To store any error within the pipeline
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp()}_status.log" # To store any error within the pipeline
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -104,8 +93,8 @@ rule qiime2_import: #read the data inside the directory
     threads:
         1
     resources:
-        mem_mb = 32000,
-        runtime = "96h"
+        mem_mb = 320,
+        runtime = "16h"
     shell:
         "(qiime tools import --type 'SampleData[SequencesWithQuality]' "
         "--input-path {input.manifest} "
@@ -124,7 +113,7 @@ rule quality_control:
     group:
         "deblur"
     params:
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp(run_name, log_dir=f'{run_dir}/{run_name}/0_logs_wagtail')}_status.log" # To store any error within the pipeline
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp()}_status.log" # To store any error within the pipeline
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -134,8 +123,8 @@ rule quality_control:
     threads:
         1
     resources:
-        mem_mb = 32000,
-        runtime = "96h"
+        mem_mb = 4000,
+        runtime = "8h"
     shell:
         "(qiime quality-filter q-score --i-demux {input} "
         "--o-filtered-sequences {output.filtered} --o-filter-stats {output.stats}) 2> {log} || echo '{wildcards.filename} Error at quality_control' >> {params.error_log}"
@@ -154,7 +143,7 @@ rule deblur:
     group:
         "deblur"
     params:
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp(run_name, log_dir=f'{run_dir}/{run_name}/0_logs_wagtail')}_status.log" # To store any error within the pipeline
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp()}_status.log" # To store any error within the pipeline
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -164,8 +153,8 @@ rule deblur:
     threads:
         1
     resources:
-        mem_mb = 32000,
-        runtime = "96h"
+        mem_mb = 8000,
+        runtime = "48h"
     shell:
         "(qiime deblur denoise-16S --i-demultiplexed-seqs {input} "
         "--p-trim-length -1 --p-sample-stats "
@@ -191,7 +180,7 @@ rule export_seqs:
     params:
         #defining the used script for this rule
         script = f"{script_dir}/qiime2_seqs_export.py",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp(run_name, log_dir=f'{run_dir}/{run_name}/0_logs_wagtail')}_status.log" # To store any error within the pipeline
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp()}_status.log" # To store any error within the pipeline
     log:
         f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/export_seqs.log"
     benchmark:
@@ -199,8 +188,8 @@ rule export_seqs:
     threads:
         1
     resources:
-        mem_mb = 32000,
-        runtime = "96h"
+        mem_mb = 960,
+        runtime = "4h"
     shell:
         "(python {params.script} --input-path {input.representative} "
         "--output-path {output.output}) 2> {log} || echo '{wildcards.filename} Error at export_seqs' >> {params.error_log}"
@@ -225,7 +214,7 @@ rule mappy:
         #defining the used script for this rule
         script = f"{script_dir}/mappy_script.py",
         sample = "{filename}",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp(run_name, log_dir=f'{run_dir}/{run_name}/0_logs_wagtail')}_status.log" # To store any error within the pipeline
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp()}_status.log" # To store any error within the pipeline
     log:
         f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/mappy.log"
         #log and benchmark files are located in 0_logs folder and the subdirectory with user-defined name
@@ -234,8 +223,8 @@ rule mappy:
     threads:
         1
     resources:
-        mem_mb = 32000,
-        runtime = "96h"
+        mem_mb = 8000,
+        runtime = "48h"
     shell:
         "(python {params.script} -i {input.F} "
         "-r {input.ref} -a {output.align} -m {output.meta} "
@@ -251,7 +240,7 @@ rule export_table:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
-        "deblur"
+        "local2"
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     params:
@@ -259,16 +248,16 @@ rule export_table:
         script = f"{script_dir}/qiime2_biom_export.py",
         #parameter to change the filename for the script
         name = "{filename}.biom",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp(run_name, log_dir=f'{run_dir}/{run_name}/0_logs_wagtail')}_status.log" # To store any error within the pipeline
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp()}_status.log" # To store any error within the pipeline
     log:
         f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/export_table.log"
     benchmark:
-        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/export_biom.benchmark.txt"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/export_table.benchmark.txt"
     threads:
         1
     resources:
-        mem_mb = 32000,
-        runtime = "96h"
+        mem_mb = 800,
+        runtime = "16h"
     shell:
         "(python {params.script} --input-path {input.table} "
         "--output-path {output.output} "
@@ -284,9 +273,9 @@ rule biom_to_tsv:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
-        "deblur"
+        "local2"
     params:
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp(run_name, log_dir=f'{run_dir}/{run_name}/0_logs_wagtail')}_status.log" # To store any error within the pipeline
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp()}_status.log" # To store any error within the pipeline
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -296,8 +285,8 @@ rule biom_to_tsv:
     threads:
         1
     resources:
-        mem_mb = 32000,
-        runtime = "96h"
+        mem_mb = 320,
+        runtime = "4h"
     shell:
         "(biom convert -i {input} -o {output} --to-tsv) 2> {log} || echo '{wildcards.filename} Error at biom_to_tsv' >> {params.error_log}"
 
@@ -310,9 +299,9 @@ rule edit_table:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
-        "deblur"
+        "local2"
     params:
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp(run_name, log_dir=f'{run_dir}/{run_name}/0_logs_wagtail')}_status.log" # To store any error within the pipeline
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp()}_status.log" # To store any error within the pipeline
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -322,8 +311,8 @@ rule edit_table:
     threads:
         1
     resources:
-        mem_mb = 32000,
-        runtime = "96h"
+        mem_mb = 160,
+        runtime = "1h"
     shell:
         "(tail -n +3 {input} > {output}) 2> {log} || echo '{wildcards.filename} Error at edit_table' >> {params.error_log}"
 
@@ -337,13 +326,13 @@ rule extract_taxonomy:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
-        "deblur"
+        "local2"
     params:
         #sample name for the extract_taxonomy.py script -> needed for the script
         sample = "{filename}",
         #defining the used script for this rule
         script = f"{script_dir}/extract_taxonomy_danica.py",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp(run_name, log_dir=f'{run_dir}/{run_name}/0_logs_wagtail')}_status.log" # To store any error within the pipeline
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp()}_status.log" # To store any error within the pipeline
     conda:
         "envs/mappy.yaml"
     log:
@@ -353,8 +342,8 @@ rule extract_taxonomy:
     threads:
         1
     resources:
-        mem_mb = 32000,
-        runtime = "96h"
+        mem_mb = 320,
+        runtime = "16h"
     shell:
         "(python {params.script} -i {input.primary} "
         "-t {input.table} "
@@ -374,11 +363,11 @@ rule qiime_stats:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
-        "deblur"
+        "local2"
     params:
         #defining the used script for this rule
         script = f"{script_dir}/wagtail_metadata_qiimes.py",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp(run_name, log_dir=f'{run_dir}/{run_name}/0_logs_wagtail')}_status.log" # To store any error within the pipeline
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp()}_status.log" # To store any error within the pipeline
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -388,8 +377,8 @@ rule qiime_stats:
     threads:
         1
     resources:
-        mem_mb = 32000,
-        runtime = "96h"
+        mem_mb = 4000,
+        runtime = "32h"
     shell:
         "(python {params.script} --input-qc {input.qc} --output-qc {output.qc_dir} "
         "--input-deblur {input.deblur} --output-deblur {output.deblur_dir}) 2> {log} || echo '{wildcards.filename} Error at qiime_stats' >> {params.error_log}"
@@ -406,12 +395,12 @@ rule metadata_creation:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
-        "deblur"
+        "local2"
     params:
         #defining the used script for this rule
         script = f"{script_dir}/wagtail_metadata_meta_combine.py",
         run = "{filename}",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp(run_name, log_dir=f'{run_dir}/{run_name}/0_logs_wagtail')}_status.log" # To store any error within the pipeline
+        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp()}_status.log" # To store any error within the pipeline
     conda:
         "envs/mappy.yaml"
     log:
@@ -421,8 +410,8 @@ rule metadata_creation:
     threads:
         1
     resources:
-        mem_mb = 32000,
-        runtime = "96h"
+        mem_mb = 320,
+        runtime = "16h"
     shell:
         "(python {params.script} --qc-file {input.final_qc} --deblur-file {input.final_deblur} "
         "--mappy-file {input.final_mappy} --output-path {output.directory} "
@@ -437,7 +426,7 @@ rule metadata_combine:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
-        "deblur"
+        "local2"
     conda:
         "envs/mappy.yaml"
     log:
@@ -447,7 +436,7 @@ rule metadata_combine:
     threads:
         1
     resources:
-        mem_mb = 32000,
-        runtime = "96h"
+        mem_mb = 160,
+        runtime = "1h"
     shell:
         "(head -n 1 {input.metadata[0]} > {output} && tail -n +2 -q {input.metadata} >> {output}) 2> {log}"
