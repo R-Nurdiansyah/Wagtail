@@ -29,7 +29,7 @@ def generate_timestamp():
 
 ###rules###
 #set localrules to run in the local machine
-localrules: manifest, qiime2_import, export_table, biom_to_tsv, edit_table, extract_taxonomy, qiime_stats, metadata_creation, metadata_combine
+localrules: manifest, qiime2_import, export_seqs, export_table, biom_to_tsv, edit_table, extract_taxonomy, qiime_stats, metadata_creation, metadata_combine
 
 #rule all to run all the rules at once
 rule all:
@@ -69,7 +69,7 @@ rule manifest:
         runtime = "4h"
     shell:
         "(python {params.script} --input {params.sample} --file-map {input.filemap} "
-        "--output {output.output_dir}| touch {output.manifest}) 2> {log} || echo '{wildcards.filename} Error at manifest' >> {params.error_log}"
+        "--output {output.output_dir}) 2> {log} || echo '{wildcards.filename} Error at manifest' >> {params.error_log}"
    
 rule qiime2_import: #read the data inside the directory
 #import data using manifest into qiime2 artifact and single end data only
@@ -93,7 +93,7 @@ rule qiime2_import: #read the data inside the directory
     threads:
         1
     resources:
-        mem_mb = 320,
+        mem_mb = 640,
         runtime = "16h"
     shell:
         "(qiime tools import --type 'SampleData[SequencesWithQuality]' "
@@ -124,7 +124,7 @@ rule quality_control:
         1
     resources:
         mem_mb = 4000,
-        runtime = "8h"
+        runtime = "12h"
     shell:
         "(qiime quality-filter q-score --i-demux {input} "
         "--o-filtered-sequences {output.filtered} --o-filter-stats {output.stats}) 2> {log} || echo '{wildcards.filename} Error at quality_control' >> {params.error_log}"
@@ -151,15 +151,16 @@ rule deblur:
     benchmark:
         f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/deblur.benchmark.txt"
     threads:
-        1
+        2
     resources:
-        mem_mb = 8000,
-        runtime = "48h"
+        mem_mb = 4000,
+        runtime = "36h"
     shell:
         "(qiime deblur denoise-16S --i-demultiplexed-seqs {input} "
         "--p-trim-length -1 --p-sample-stats "
         #"--p-trim-length 150 --p-sample-stats "
         "--p-min-reads 0 "
+        "--p-jobs-to-start {threads} "
         "--o-representative-sequences {output.representative} " 
         "--o-table {output.table} " 
         "--o-stats {output.stats}) 2> {log} || echo '{wildcards.filename} Error at deblur' >> {params.error_log}"
@@ -174,7 +175,7 @@ rule export_seqs:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard 
     group:
-        "deblur"
+        "local3"
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     params:
@@ -188,8 +189,8 @@ rule export_seqs:
     threads:
         1
     resources:
-        mem_mb = 960,
-        runtime = "4h"
+        mem_mb = 1000,
+        runtime = "1h"
     shell:
         "(python {params.script} --input-path {input.representative} "
         "--output-path {output.output}) 2> {log} || echo '{wildcards.filename} Error at export_seqs' >> {params.error_log}"
@@ -207,7 +208,7 @@ rule mappy:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
-        "deblur" #make sure no whitespace
+        "mappy" #make sure no whitespace
     conda:
          "envs/mappy.yaml"
     params:
@@ -221,7 +222,7 @@ rule mappy:
     benchmark:
         f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/mappy.benchmark.txt"
     threads:
-        1
+        2
     resources:
         mem_mb = 8000,
         runtime = "48h"
@@ -256,8 +257,8 @@ rule export_table:
     threads:
         1
     resources:
-        mem_mb = 800,
-        runtime = "16h"
+        mem_mb = 1000,
+        runtime = "1h"
     shell:
         "(python {params.script} --input-path {input.table} "
         "--output-path {output.output} "
@@ -286,7 +287,7 @@ rule biom_to_tsv:
         1
     resources:
         mem_mb = 320,
-        runtime = "4h"
+        runtime = "1h"
     shell:
         "(biom convert -i {input} -o {output} --to-tsv) 2> {log} || echo '{wildcards.filename} Error at biom_to_tsv' >> {params.error_log}"
 
@@ -311,7 +312,7 @@ rule edit_table:
     threads:
         1
     resources:
-        mem_mb = 160,
+        mem_mb = 320,
         runtime = "1h"
     shell:
         "(tail -n +3 {input} > {output}) 2> {log} || echo '{wildcards.filename} Error at edit_table' >> {params.error_log}"
@@ -342,8 +343,8 @@ rule extract_taxonomy:
     threads:
         1
     resources:
-        mem_mb = 320,
-        runtime = "16h"
+        mem_mb = 160,
+        runtime = "1h"
     shell:
         "(python {params.script} -i {input.primary} "
         "-t {input.table} "
@@ -377,8 +378,8 @@ rule qiime_stats:
     threads:
         1
     resources:
-        mem_mb = 4000,
-        runtime = "32h"
+        mem_mb = 640,
+        runtime = "1h"
     shell:
         "(python {params.script} --input-qc {input.qc} --output-qc {output.qc_dir} "
         "--input-deblur {input.deblur} --output-deblur {output.deblur_dir}) 2> {log} || echo '{wildcards.filename} Error at qiime_stats' >> {params.error_log}"
@@ -411,7 +412,7 @@ rule metadata_creation:
         1
     resources:
         mem_mb = 320,
-        runtime = "16h"
+        runtime = "1h"
     shell:
         "(python {params.script} --qc-file {input.final_qc} --deblur-file {input.final_deblur} "
         "--mappy-file {input.final_mappy} --output-path {output.directory} "
