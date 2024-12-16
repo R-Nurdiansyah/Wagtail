@@ -35,7 +35,7 @@ localrules: manifest, qiime2_import, export_seqs, export_table, biom_to_tsv, edi
 rule all:
     input:
         expand(f"{run_dir}/{run_name}/6_condensed_wagtail/{{filename}}_condensed.tsv", filename = filenames),
-        (f"{run_dir}/{run_name}/7_metadata/full_metadata.tsv")
+        (f"{run_dir}/{run_name}/7_metadata/{run_name}_full_metadata.tsv")
 
 rule manifest:
 #read the data in filenames and check with file map
@@ -130,11 +130,11 @@ rule quality_control:
         "--o-filtered-sequences {output.filtered} --o-filter-stats {output.stats}) 2> {log} || echo '{wildcards.filename} Error at quality_control' >> {params.error_log}"
 
 rule deblur:
-#demultiplex the data to get the representative sequences, OTU table, and denoising stats
-#delete the trunc length as it is only single end data
+#script version
     input: 
         f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}-filtered.qza"
     output: 
+        path = temp(directory(f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}")),
         representative = temp(f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-rep-seqs.qza"),
         table = temp(f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-table.qza"),
         stats = temp(f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-deblur-stats.qza")
@@ -143,6 +143,7 @@ rule deblur:
     group:
         "deblur"
     params:
+        script = f"{script_dir}/deblur_all.py",
         error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp()}_status.log" # To store any error within the pipeline
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
@@ -156,14 +157,9 @@ rule deblur:
         mem_mb = 4000,
         runtime = "36h"
     shell:
-        "(qiime deblur denoise-16S --i-demultiplexed-seqs {input} "
-        "--p-trim-length -1 --p-sample-stats "
-        #"--p-trim-length 150 --p-sample-stats "
-        "--p-min-reads 0 "
-        "--p-jobs-to-start {threads} "
-        "--o-representative-sequences {output.representative} " 
-        "--o-table {output.table} " 
-        "--o-stats {output.stats}) 2> {log} || echo '{wildcards.filename} Error at deblur' >> {params.error_log}"
+        "(python {params.script} -i {input} -o {output.path} -t {threads} "
+        "-r {output.representative} -a {output.table} "
+        "-s {output.stats}) 2> {log} || echo '{wildcards.filename} Error at deblur' >> {params.error_log}"
 
 rule export_seqs:
 #export the biom table from the abundance table using the custom script
@@ -175,7 +171,7 @@ rule export_seqs:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard 
     group:
-        "local3"
+        "mappy"
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     params:
@@ -222,10 +218,10 @@ rule mappy:
     benchmark:
         f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/mappy.benchmark.txt"
     threads:
-        2
+        1
     resources:
-        mem_mb = 8000,
-        runtime = "48h"
+        mem_mb = 7000,
+        runtime = "47h"
     shell:
         "(python {params.script} -i {input.F} "
         "-r {input.ref} -a {output.align} -m {output.meta} "
@@ -423,11 +419,9 @@ rule metadata_combine:
     input:
         metadata = expand(f"{run_dir}/{run_name}/7_metadata/{{filename}}/{{filename}}_metadata.tsv", filename = filenames)
     output:
-        f"{run_dir}/{run_name}/7_metadata/full_metadata.tsv"
+        f"{run_dir}/{run_name}/7_metadata/{run_name}_full_metadata.tsv"
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
-    group:
-        "local2"
     conda:
         "envs/mappy.yaml"
     log:
