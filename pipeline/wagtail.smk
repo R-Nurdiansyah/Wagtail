@@ -31,6 +31,12 @@ def generate_timestamp():
 #set localrules to run in the local machine
 localrules: manifest, qiime2_import, export_seqs, export_table, biom_to_tsv, edit_table, extract_taxonomy, qiime_stats, metadata_creation, clean_intermidiates, metadata_combine
 
+#rule all to run all the rules at once
+rule all:
+    input:
+        expand(f"{run_dir}/{run_name}/6_condensed_wagtail/{{filename}}_condensed.tsv", filename = filenames),
+        (f"{run_dir}/{run_name}/7_metadata/{run_name}_full_metadata.tsv")
+
 rule manifest:
 #read the data in filenames and check with file map
 #create manifest file for each accession, single end data only
