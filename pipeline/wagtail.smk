@@ -1,4 +1,4 @@
-#snakemake file for wagtail pipeline version 0.05 (config, mappy, metadata with testing)
+#snakemake file for wagtail pipeline version 0.08 (below 48 hours wall and delete inbetween files using a rule)
 
 ###tools import###
 import os
@@ -29,13 +29,7 @@ def generate_timestamp():
 
 ###rules###
 #set localrules to run in the local machine
-localrules: manifest, qiime2_import, export_seqs, export_table, biom_to_tsv, edit_table, extract_taxonomy, qiime_stats, metadata_creation, metadata_combine
-
-#rule all to run all the rules at once
-rule all:
-    input:
-        expand(f"{run_dir}/{run_name}/6_condensed_wagtail/{{filename}}_condensed.tsv", filename = filenames),
-        (f"{run_dir}/{run_name}/7_metadata/{run_name}_full_metadata.tsv")
+localrules: manifest, qiime2_import, export_seqs, export_table, biom_to_tsv, edit_table, extract_taxonomy, qiime_stats, metadata_creation, clean_intermidiates, metadata_combine
 
 rule manifest:
 #read the data in filenames and check with file map
@@ -45,8 +39,8 @@ rule manifest:
         filemap = config["file_map"]
     output:
         #create manifest file for each accession in the data_dir
-        output_dir = temp(directory(f"{run_dir}/{run_name}/0_manifest/{{filename}}")),
-        manifest = temp(f"{run_dir}/{run_name}/0_manifest/{{filename}}/{{filename}}_manifest.csv")
+        output_dir = directory(f"{run_dir}/{run_name}/0_manifest/{{filename}}"),
+        manifest = f"{run_dir}/{run_name}/0_manifest/{{filename}}/{{filename}}_manifest.csv"
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
@@ -76,7 +70,7 @@ rule qiime2_import: #read the data inside the directory
     input:
         manifest = f"{run_dir}/{run_name}/0_manifest/{{filename}}/{{filename}}_manifest.csv"
     output:
-        temp(f"{run_dir}/{run_name}/1_import_wagtail/{{filename}}-single.qza")
+        f"{run_dir}/{run_name}/1_import_wagtail/{{filename}}-single.qza"
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
@@ -106,8 +100,8 @@ rule quality_control:
     input: 
         f"{run_dir}/{run_name}/1_import_wagtail/{{filename}}-single.qza"
     output: 
-        filtered = temp(f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}-filtered.qza"),
-        stats = temp(f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}-qc-stats.qza")
+        filtered = f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}-filtered.qza",
+        stats = f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}-qc-stats.qza"
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
@@ -134,10 +128,10 @@ rule deblur:
     input: 
         f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}-filtered.qza"
     output: 
-        path = temp(directory(f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}")),
-        representative = temp(f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-rep-seqs.qza"),
-        table = temp(f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-table.qza"),
-        stats = temp(f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-deblur-stats.qza")
+        path = directory(f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}"),
+        representative = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-rep-seqs.qza",
+        table = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-table.qza",
+        stats = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-deblur-stats.qza"
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
@@ -166,8 +160,8 @@ rule export_seqs:
     input: 
         representative = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-rep-seqs.qza"
     output:
-        output = temp(directory(f"{run_dir}/{run_name}/4_rep_seqs_wagtail/{{filename}}")),
-        final = temp(f"{run_dir}/{run_name}/4_rep_seqs_wagtail/{{filename}}/dna-sequences.fasta")
+        output = directory(f"{run_dir}/{run_name}/4_rep_seqs_wagtail/{{filename}}"),
+        final = f"{run_dir}/{run_name}/4_rep_seqs_wagtail/{{filename}}/dna-sequences.fasta"
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard 
     group:
@@ -199,8 +193,8 @@ rule mappy:
     #this rule is dependent on the reference being loaded
         ref = f"{db_dir}/danica.mmi"
     output:
-        align = temp(f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_alignment.tsv"),
-        meta = temp(f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_metadata.tsv")
+        align = f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_alignment.tsv",
+        meta = f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_metadata.tsv"
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
@@ -232,8 +226,8 @@ rule export_table:
     input: 
         table = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-table.qza"
     output:
-        output = temp(directory(f"{run_dir}/{run_name}/4_table_wagtail/{{filename}}_biom")),
-        final = temp(f"{run_dir}/{run_name}/4_table_wagtail/{{filename}}_biom/{{filename}}.biom")
+        output = directory(f"{run_dir}/{run_name}/4_table_wagtail/{{filename}}_biom"),
+        final = f"{run_dir}/{run_name}/4_table_wagtail/{{filename}}_biom/{{filename}}.biom"
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
@@ -266,7 +260,7 @@ rule biom_to_tsv:
     #check the directory from the previous rule and read the biom table inside
         f"{run_dir}/{run_name}/4_table_wagtail/{{filename}}_biom/{{filename}}.biom"
     output: 
-        temp(f"{run_dir}/{run_name}/4_table_wagtail/{{filename}}_table.tsv")
+        f"{run_dir}/{run_name}/4_table_wagtail/{{filename}}_table.tsv"
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
@@ -292,7 +286,7 @@ rule edit_table:
     input: 
         f"{run_dir}/{run_name}/4_table_wagtail/{{filename}}_table.tsv"
     output: 
-        temp(f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_table_edit.tsv")
+        f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_table_edit.tsv"
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
@@ -353,10 +347,10 @@ rule qiime_stats:
         qc = f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}-qc-stats.qza",
         deblur = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-deblur-stats.qza"
     output: 
-        qc_dir = temp(directory(f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}")),
-        deblur_dir = temp(directory(f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}")),
-        final_qc = temp(f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}/stats.csv"),
-        final_deblur = temp(f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}/stats.csv")
+        qc_dir = directory(f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}"),
+        deblur_dir = directory(f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}"),
+        final_qc = f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}/stats.csv",
+        final_deblur = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}/stats.csv"
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     group:
@@ -414,10 +408,30 @@ rule metadata_creation:
         "--mappy-file {input.final_mappy} --output-path {output.directory} "
         "--run-name {params.run}) 2> {log} || echo '{wildcards.filename} Error at metadata' >> {params.error_log}"
 
+rule clean_intermidiates:
+#rule to clean every in-between result after metadata for each filename is created. cleaning target is 1_* until 5_*
+    input:
+        metadata = expand(f"{run_dir}/{run_name}/7_metadata/{{filename}}/{{filename}}_metadata.tsv", filename = filenames),
+        community = expand(f"{run_dir}/{run_name}/6_condensed_wagtail/{{filename}}_condensed.tsv", filename = filenames)
+    output:
+        touch(f"{run_dir}/{run_name}/cleanup_done.txt")
+    wildcard_constraints:
+        filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
+    params:
+        target = f"{run_dir}/{run_name}/"
+    threads:
+        1
+    resources:
+        mem_mb = 160,
+        runtime = "1h"
+    shell:
+        "rm -rf {params.target}/[1-5]_* && touch {output}"
+
 rule metadata_combine:
 #combine all metadata files into one
     input:
-        metadata = expand(f"{run_dir}/{run_name}/7_metadata/{{filename}}/{{filename}}_metadata.tsv", filename = filenames)
+        metadata = expand(f"{run_dir}/{run_name}/7_metadata/{{filename}}/{{filename}}_metadata.tsv", filename = filenames),
+        cleanup = f"{run_dir}/{run_name}/cleanup_done.txt"
     output:
         f"{run_dir}/{run_name}/7_metadata/{run_name}_full_metadata.tsv"
     wildcard_constraints:
