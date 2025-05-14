@@ -1,7 +1,7 @@
 ![Wagtail Logo](https://github.com/R-Nurdiansyah/Wagtail/blob/development/wagtail_logo_(29-7-2024).png?raw=true)
 
 # Wagtail
-_Version 0.05 (21-11-2024)_
+_Version 0.09 (14-05-2025)_
 
 Wagtail is an accurate and scalable tools to analyze 16S dataset with easy-to-swap reference database. As for now, the functionality is **limited to 16S amplicon sequences sequenced from Illumina sequencer only**.\
 The tool is a combination of Qiime 2 [Deblur](https://github.com/biocore/deblur/blob/master/README.md) plugin for quality control and Minimap2 aligner to align representative sequences from deblur. The result is a taxonomy profile in the format of condense and running metadata. The combination is weaved using [Snakemake](https://snakemake.github.io/) to allow easy reproducibility, benchmarking, and packaging.\
