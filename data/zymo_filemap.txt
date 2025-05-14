@@ -1,0 +1,7 @@
+V1V3	/mnt/hpccs01/work/microbiome/users/r_nurdiansyah/wagtail/development/data/Zymo/V1V3-1.fastq.gz
+V6V8	/mnt/hpccs01/work/microbiome/users/r_nurdiansyah/wagtail/development/data/Zymo/V6V8-1.fastq.gz
+V4	/mnt/hpccs01/work/microbiome/users/r_nurdiansyah/wagtail/development/data/Zymo/V4-1.fastq.gz
+V4V6	/mnt/hpccs01/work/microbiome/users/r_nurdiansyah/wagtail/development/data/Zymo/V4V6-1.fastq.gz
+V3V4	/mnt/hpccs01/work/microbiome/users/r_nurdiansyah/wagtail/development/data/Zymo/V3V4-1.fastq.gz
+V1V2	/mnt/hpccs01/work/microbiome/users/r_nurdiansyah/wagtail/development/data/Zymo/V1V2-1.fastq.gz
+V7V9	/mnt/hpccs01/work/microbiome/users/r_nurdiansyah/wagtail/development/data/Zymo/V7V9-1.fastq.gz
