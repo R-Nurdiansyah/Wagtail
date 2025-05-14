@@ -1,4 +1,4 @@
-#snakemake file for wagtail pipeline version 0.09 (rule reduction, 12 rules instead of 14, grouping of rules and )
+#snakemake file for wagtail pipeline version 0.09 (rule reduction, 12 rules instead of 14, grouping of rules for HPC, and local rule declared correctly)
 
 ###tools import###
 import os
@@ -65,8 +65,8 @@ rule manifest:
         mem_mb = 320,
         runtime = "1h"
     shell:
-        "(python {params.script} --input {params.sample} --file-map {input.filemap} "
-        "--output {output.output_dir}) 2> {log} || echo '{wildcards.filename} Error at manifest' >> {params.error_log}"
+        "python {params.script} --input {params.sample} --file-map {input.filemap} "
+        "--output {output.output_dir} &> {log} || echo '{wildcards.filename} Error at manifest' >> {params.error_log}"
    
 rule qiime2_import: #read the data inside the directory
 #import data using manifest into qiime2 artifact and single end data only
@@ -92,10 +92,10 @@ rule qiime2_import: #read the data inside the directory
         mem_mb = 640,
         runtime = "1h"
     shell:
-        "(qiime tools import --type 'SampleData[SequencesWithQuality]' "
+        "qiime tools import --type 'SampleData[SequencesWithQuality]' "
         "--input-path {input.manifest} "
         "--input-format SingleEndFastqManifestPhred33 "
-        "--output-path {output}) 2> {log} || echo '{wildcards.filename} Error at qiime_import' >> {params.error_log}"
+        "--output-path {output} &> {log} || echo '{wildcards.filename} Error at qiime_import' >> {params.error_log}"
 
 rule quality_control:
     group: "deblur"
@@ -121,8 +121,8 @@ rule quality_control:
         mem_mb = 4000,
         runtime = "1h"
     shell:
-        "(qiime quality-filter q-score --i-demux {input} "
-        "--o-filtered-sequences {output.filtered} --o-filter-stats {output.stats}) 2> {log} || echo '{wildcards.filename} Error at quality_control' >> {params.error_log}"
+        "qiime quality-filter q-score --i-demux {input} "
+        "--o-filtered-sequences {output.filtered} --o-filter-stats {output.stats} &> {log} || echo '{wildcards.filename} Error at quality_control' >> {params.error_log}"
 
 rule deblur:
     group: "deblur"
@@ -151,9 +151,9 @@ rule deblur:
         mem_mb = 4000,
         runtime = "47h"
     shell:
-        "(python {params.script} -i {input} -o {output.path} -t {threads} "
+        "python {params.script} -i {input} -o {output.path} -t {threads} "
         "-r {output.representative} -a {output.table} "
-        "-s {output.stats}) 2> {log} || echo '{wildcards.filename} Error at deblur' >> {params.error_log}"
+        "-s {output.stats} &> {log} || echo '{wildcards.filename} Error at deblur' >> {params.error_log}"
 
 rule export_seqs:
     group: "mappy"
@@ -181,8 +181,8 @@ rule export_seqs:
         mem_mb = 1000,
         runtime = "1h"
     shell:
-        "(python {params.script} --input-path {input.representative} "
-        "--output-path {output.output}) 2> {log} || echo '{wildcards.filename} Error at export_seqs' >> {params.error_log}"
+        "python {params.script} --input-path {input.representative} "
+        "--output-path {output.output} &> {log} || echo '{wildcards.filename} Error at export_seqs' >> {params.error_log}"
 
 rule mappy:
     group: "mappy"
@@ -214,9 +214,9 @@ rule mappy:
         mem_mb = 7000,
         runtime = "24h"
     shell:
-        "(python {params.script} -i {input.F} "
+        "python {params.script} -i {input.F} "
         "-r {input.ref} -a {output.align} -m {output.meta} "
-        "-s {params.sample}) 2> {log} || echo '{wildcards.filename} Error at mappy' >> {params.error_log}"
+        "-s {params.sample} &> {log} || echo '{wildcards.filename} Error at mappy' >> {params.error_log}"
 
 rule export_and_edit_table:
     localrule: True
@@ -248,11 +248,11 @@ rule export_and_edit_table:
         mem_mb = 1000,
         runtime = "1h"
     shell:
-        "(python {params.script} --input-path {input.table} "
+        "python {params.script} --input-path {input.table} "
         "--output-path {output.folder} "
-        "--new-filename {params.name}) && "
+        "--new-filename {params.name} && "
         "biom convert -i {output.biom} -o {output.table} --to-tsv && "
-        "tail -n +3 {output.table} > {output.edited} 2> {log} || echo '{wildcards.filename} Error at export_and_edit_table' >> {params.error_log}"
+        "(tail -n +3 {output.table} > {output.edited}) &> {log} || echo '{wildcards.filename} Error at export_and_edit_table' >> {params.error_log}"
 
 rule extract_taxonomy:
     localrule: True
@@ -282,10 +282,10 @@ rule extract_taxonomy:
         mem_mb = 160,
         runtime = "1h"
     shell:
-        "(python {params.script} -i {input.primary} "
+        "python {params.script} -i {input.primary} "
         "-t {input.table} "
         "-o {output} "
-        "-s {params.sample}) 2> {log} || echo '{wildcards.filename} Error at extract_taxonomy' >> {params.error_log}"
+        "-s {params.sample} &> {log} || echo '{wildcards.filename} Error at extract_taxonomy' >> {params.error_log}"
 
 rule qiime_stats:
     localrule: True
@@ -316,8 +316,8 @@ rule qiime_stats:
         mem_mb = 640,
         runtime = "1h"
     shell:
-        "(python {params.script} --input-qc {input.qc} --output-qc {output.qc_dir} "
-        "--input-deblur {input.deblur} --output-deblur {output.deblur_dir}) 2> {log} || echo '{wildcards.filename} Error at qiime_stats' >> {params.error_log}"
+        "python {params.script} --input-qc {input.qc} --output-qc {output.qc_dir} "
+        "--input-deblur {input.deblur} --output-deblur {output.deblur_dir} &> {log} || echo '{wildcards.filename} Error at qiime_stats' >> {params.error_log}"
 
 rule metadata_creation:
     localrule: True
@@ -348,9 +348,9 @@ rule metadata_creation:
         mem_mb = 320,
         runtime = "1h"
     shell:
-        "(python {params.script} --qc-file {input.final_qc} --deblur-file {input.final_deblur} "
+        "python {params.script} --qc-file {input.final_qc} --deblur-file {input.final_deblur} "
         "--mappy-file {input.final_mappy} --output-path {output.directory} "
-        "--run-name {params.run}) 2> {log} || echo '{wildcards.filename} Error at metadata' >> {params.error_log}"
+        "--run-name {params.run} &> {log} || echo '{wildcards.filename} Error at metadata' >> {params.error_log}"
 
 rule clean_intermidiates:
     localrule: True
@@ -396,4 +396,4 @@ rule metadata_combine:
         mem_mb = 160,
         runtime = "1h"
     shell:
-        "(head -n 1 {input.metadata[0]} > {output} && tail -n +2 -q {input.metadata} >> {output}) 2> {log}"
+        "head -n 1 {input.metadata[0]} > {output} && tail -n +2 -q {input.metadata} >> {output} &> {log}"
