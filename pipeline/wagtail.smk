@@ -1,4 +1,4 @@
-#snakemake file for wagtail pipeline version 0.10 (adding tempdir for qiime2 rules so it does not crash and better logging)
+#snakemake file for wagtail pipeline version 0.11 (soft fail works, and the sqlite database is created as logging)
 
 ###tools import###
 import os
@@ -27,12 +27,15 @@ def generate_timestamp():
     #get current date
     return datetime.now().strftime('%Y%m%d')
 
+timestamp = generate_timestamp()
+sqlite_db_path = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{timestamp}_log.db"
+
 ###rules###
 #rule all to run all the rules at once
 rule all:
     input:
         expand(f"{run_dir}/{run_name}/6_condensed_wagtail/{{filename}}_condensed.tsv", filename = filenames),
-        (f"{run_dir}/{run_name}/7_metadata/{run_name}_full_metadata.tsv")
+        (f"{run_dir}/{run_name}/7_metadata/{run_name}_full_metadata.tsv"),  
     localrule: True
 
 rule manifest:
@@ -52,87 +55,160 @@ rule manifest:
         #defining the used script for this rule
         script = f"{script_dir}/create_manifest_wagtail.py",
         sample = "{filename}",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp()}_status.log" # To store any error within the pipeline
+        sqlite_db = sqlite_db_path,
+        rule_name = "manifest",
+        logger = f"{script_dir}/wagtail_sqlite_logger.py",
+        checker = f"{script_dir}/check_sqlite_status.py"
     conda:
         "envs/mappy.yaml"
     log:
         f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/manifest_creation.log"
     benchmark:
-        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/manifest_creation.benchmark.txt"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/manifest_creation.benchmark.log"
     threads:
         1
     resources:
         mem_mb = 320,
         runtime = "1h"
     shell:
-        "python {params.script} --input {params.sample} --file-map {input.filemap} "
-        "--output {output.output_dir} &> {log} || echo \"[$(date +'%H:%M')]{wildcards.filename} Error at manifest\" >> {params.error_log}"
-   
-rule qiime2_import: #read the data inside the directory
-#import data using manifest into qiime2 artifact and single end data only
+        r"""
+        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.rule_name}")
+        if [ "$sqlite_status" = "FAILED" ]; then
+            touch {output.manifest}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED /dev/null /dev/null
+            rm -f {log}
+            find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
+            exit 0
+        fi
+        stdout_file=$(mktemp)
+        stderr_file=$(mktemp)
+        set +e
+        python {params.script} --input {params.sample} --file-map {input.filemap} --output {output.output_dir} >$stdout_file 2>$stderr_file
+        status=$?
+        set -e
+        if [[ $status -ne 0 ]]; then
+            touch {output.manifest}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED $stdout_file $stderr_file
+        else
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK $stdout_file $stderr_file
+        fi
+        rm -f $stdout_file $stderr_file
+        rm -f {log}
+        find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
+        """
+
+rule qiime2_import:
     localrule: True
     input:
         manifest = f"{run_dir}/{run_name}/0_manifest/{{filename}}/{{filename}}_manifest.csv"
     output:
-        f"{run_dir}/{run_name}/1_import_wagtail/{{filename}}-single.qza"
+        qza = f"{run_dir}/{run_name}/1_import_wagtail/{{filename}}-single.qza"
     wildcard_constraints:
-        filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
+        filename = r"[^\.]+"
     params:
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp()}_status.log" # To store any error within the pipeline
+        sqlite_db = sqlite_db_path,
+        rule_name = "qiime2_import",
+        logger = f"{script_dir}/wagtail_sqlite_logger.py",
+        checker = f"{script_dir}/check_sqlite_status.py"
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
         f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/qiime2_import.log"
-        #log and benchmark files are located in 0_logs folder and the subdirectory with user-defined name
     benchmark:
-        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/qiime2_import.benchmark.txt"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/qiime2_import.benchmark.log"
     threads:
         1
     resources:
         mem_mb = 640,
         runtime = "1h"
     shell:
-        "qiime tools import --type 'SampleData[SequencesWithQuality]' "
-        "--input-path {input.manifest} "
-        "--input-format SingleEndFastqManifestPhred33 "
-        "--output-path {output} &> {log} || echo \"[$(date +'%H:%M')]{wildcards.filename} Error at qiime_import\" >> {params.error_log}"
+        r"""
+        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.rule_name}")
+        if [ "$sqlite_status" = "FAILED" ]; then
+            touch {output.qza}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED /dev/null /dev/null
+            rm -f {log}
+            find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
+            exit 0
+        fi
+        stdout_file=$(mktemp)
+        stderr_file=$(mktemp)
+        set +e
+        qiime tools import --type 'SampleData[SequencesWithQuality]' --input-path {input.manifest} --input-format SingleEndFastqManifestPhred33 --output-path {output.qza} >$stdout_file 2>$stderr_file
+        status=$?
+        set -e
+        if [[ $status -ne 0 ]]; then
+            touch {output.qza}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED $stdout_file $stderr_file
+        else
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK $stdout_file $stderr_file
+        fi
+        rm -f $stdout_file $stderr_file
+        rm -f {log}
+        find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
+        """
 
 rule quality_control:
     group: "deblur"
     #run the quality control using qiime2 quality-filter q-score
     input: 
-        f"{run_dir}/{run_name}/1_import_wagtail/{{filename}}-single.qza"
-    output: 
+        qza = f"{run_dir}/{run_name}/1_import_wagtail/{{filename}}-single.qza"
+    output:
         filtered = f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}-filtered.qza",
         stats = f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}-qc-stats.qza"
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     params:
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp()}_status.log" # To store any error within the pipeline
+        sqlite_db = sqlite_db_path,
+        rule_name = "quality_control",
+        logger = f"{script_dir}/wagtail_sqlite_logger.py",
+        checker = f"{script_dir}/check_sqlite_status.py"
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
         f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/quality_control.log"
     benchmark:
-        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/quality_control.benchmark.txt"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/quality_control.benchmark.log"
     threads:
         1
     resources:
-        mem_mb = 4000,
+        mem_mb = 2000,
         runtime = "1h"
     shell:
-        "export TMPDIR=$(mktemp -d) && "
-        "qiime quality-filter q-score --i-demux {input} "
-        "--o-filtered-sequences {output.filtered} --o-filter-stats {output.stats} &> {log} || "
-        "echo \"[$(date +'%H:%M')]{wildcards.filename} Error at quality_control\" >> {params.error_log} && "
-        "rm -rf $TMPDIR"
+        r"""
+        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.rule_name}")
+        if [ "$sqlite_status" = "FAILED" ]; then
+            touch {output.filtered} {output.stats}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED /dev/null /dev/null
+            rm -f {log}
+            find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
+            exit 0
+        fi
+        stdout_file=$(mktemp)
+        stderr_file=$(mktemp)
+        export TMPDIR=$(mktemp -d)
+        set +e
+        qiime quality-filter q-score --i-demux {input.qza} --o-filtered-sequences {output.filtered} --o-filter-stats {output.stats} >$stdout_file 2>$stderr_file
+        status=$?
+        set -e
+        if [[ $status -ne 0 ]]; then
+            touch {output.filtered} {output.stats}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED $stdout_file $stderr_file
+        else
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK $stdout_file $stderr_file
+        fi
+        rm -rf $TMPDIR
+        rm -f $stdout_file $stderr_file
+        rm -f {log}
+        find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
+        """
 
 rule deblur:
     group: "deblur"
 #script version
     input: 
-        f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}-filtered.qza"
-    output: 
+        filtered = f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}-filtered.qza"
+    output:
         path = directory(f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}"),
         representative = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-rep-seqs.qza",
         table = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-table.qza",
@@ -141,25 +217,50 @@ rule deblur:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     params:
         script = f"{script_dir}/deblur_all.py",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp()}_status.log" # To store any error within the pipeline
+        sqlite_db = sqlite_db_path,
+        rule_name = "deblur",
+        logger = f"{script_dir}/wagtail_sqlite_logger.py",
+        checker = f"{script_dir}/check_sqlite_status.py"
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
         f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/deblur.log"
     benchmark:
-        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/deblur.benchmark.txt"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/deblur.benchmark.log"
     threads:
-        2
+        1
     resources:
-        mem_mb = 4000,
+        mem_mb = 2000,
         runtime = "47h"
     shell:
-        "export TMPDIR=$(mktemp -d) && "
-        "python {params.script} -i {input} -o {output.path} -t {threads} "
-        "-r {output.representative} -a {output.table} "
-        "-s {output.stats} &> {log} || "
-        "echo \"[$(date +'%H:%M')]{wildcards.filename} Error at deblur\" >> {params.error_log} && "
-        "rm -rf $TMPDIR"
+        r"""
+        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.rule_name}")
+        if [ "$sqlite_status" = "FAILED" ]; then
+            touch {output.representative} {output.table} {output.stats}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED /dev/null /dev/null
+            rm -f {log}
+            find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
+            exit 0
+        fi
+        stdout_file=$(mktemp)
+        stderr_file=$(mktemp)
+        export TMPDIR=$(mktemp -d)
+        set +e
+        python {params.script} -i {input.filtered} -o {output.path} -t {threads} \
+            -r {output.representative} -a {output.table} -s {output.stats} >$stdout_file 2>$stderr_file
+        status=$?
+        set -e
+        if [[ $status -ne 0 ]]; then
+            touch {output.representative} {output.table} {output.stats}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED $stdout_file $stderr_file
+        else
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK $stdout_file $stderr_file
+        fi
+        rm -rf $TMPDIR
+        rm -f $stdout_file $stderr_file
+        rm -f {log}
+        find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
+        """
 
 rule export_seqs:
     group: "mappy"
@@ -174,31 +275,55 @@ rule export_seqs:
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     params:
-        #defining the used script for this rule
         script = f"{script_dir}/qiime2_seqs_export.py",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp()}_status.log" # To store any error within the pipeline
+        sqlite_db = sqlite_db_path,
+        rule_name = "export_seqs",
+        logger = f"{script_dir}/wagtail_sqlite_logger.py",
+        checker = f"{script_dir}/check_sqlite_status.py"
     log:
         f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/export_seqs.log"
     benchmark:
-        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/export_seqs.benchmark.txt"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/export_seqs.benchmark.log"
     threads:
         1
     resources:
-        mem_mb = 4000,
+        mem_mb = 2000,
         runtime = "1h"
     shell:
-        "export TMPDIR=$(mktemp -d) && "
-        "python {params.script} --input-path {input.representative} "
-        "--output-path {output.output} &> {log} || "
-        "echo \"[$(date +'%H:%M')]{wildcards.filename} Error at export_seqs\" >> {params.error_log} && "
-        "rm -rf $TMPDIR"
+        r"""
+        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.rule_name}")
+        if [ "$sqlite_status" = "FAILED" ]; then
+            touch {output.final}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED /dev/null /dev/null
+            rm -f {log}
+            find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
+            exit 0
+        fi
+        stdout_file=$(mktemp)
+        stderr_file=$(mktemp)
+        export TMPDIR=$(mktemp -d)
+        set +e
+        python {params.script} --input-path {input.representative} --output-path {output.output} >$stdout_file 2>$stderr_file
+        status=$?
+        set -e
+        if [[ $status -ne 0 ]]; then
+            touch {output.final}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED $stdout_file $stderr_file
+        else
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK $stdout_file $stderr_file
+        fi
+        rm -rf $TMPDIR
+        rm -f $stdout_file $stderr_file
+        rm -f {log}
+        find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
+        """
 
 rule mappy:
     group: "mappy"
     input:
         #as the product is one file, we can use single input
         F = f"{run_dir}/{run_name}/4_rep_seqs_wagtail/{{filename}}/dna-sequences.fasta",
-    #this rule is dependent on the reference being loaded
+        #this rule is dependent on the reference being loaded
         ref = f"{db_dir}/danica.mmi"
     output:
         align = f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_alignment.tsv",
@@ -211,24 +336,45 @@ rule mappy:
         #defining the used script for this rule
         script = f"{script_dir}/mappy_script.py",
         sample = "{filename}",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp()}_status.log" # To store any error within the pipeline
+        sqlite_db = sqlite_db_path,
+        rule_name = "mappy",
+        logger = f"{script_dir}/wagtail_sqlite_logger.py",
+        checker = f"{script_dir}/check_sqlite_status.py"
     log:
         f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/mappy.log"
-        #log and benchmark files are located in 0_logs folder and the subdirectory with user-defined name
     benchmark:
-        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/mappy.benchmark.txt"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/mappy.benchmark.log"
     threads:
         1
     resources:
         mem_mb = 4000,
         runtime = "24h"
     shell:
-        "export TMPDIR=$(mktemp -d) && "
-        "python {params.script} -i {input.F} "
-        "-r {input.ref} -a {output.align} -m {output.meta} "
-        "-s {params.sample} &> {log} || "
-        "echo \"[$(date +'%H:%M')]{wildcards.filename} Error at mappy\" >> {params.error_log} && "
-        "rm -rf $TMPDIR"
+        r"""
+        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.rule_name}")
+        if [ "$sqlite_status" = "FAILED" ]; then
+            touch {output.align} {output.meta}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED /dev/null /dev/null
+            rm -f {log}
+            find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
+            exit 0
+        fi
+        stdout_file=$(mktemp)
+        stderr_file=$(mktemp)
+        set +e
+        python {params.script} -i {input.F} -r {input.ref} -a {output.align} -m {output.meta} -s {params.sample} >$stdout_file 2>$stderr_file
+        status=$?
+        set -e
+        if [[ $status -ne 0 ]]; then
+            touch {output.align} {output.meta}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED $stdout_file $stderr_file
+        else
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK $stdout_file $stderr_file
+        fi
+        rm -f $stdout_file $stderr_file
+        rm -f {log}
+        find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
+        """
 
 rule export_and_edit_table:
     localrule: True
@@ -249,22 +395,45 @@ rule export_and_edit_table:
         script = f"{script_dir}/qiime2_biom_export.py",
         #parameter to change the filename for the script
         name = "{filename}.biom",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp()}_status.log" # To store any error within the pipeline
+        sqlite_db = sqlite_db_path,
+        rule_name = "export_and_edit_table",
+        logger = f"{script_dir}/wagtail_sqlite_logger.py",
+        checker = f"{script_dir}/check_sqlite_status.py"
     log:
         f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/export_and_edit_table.log"
     benchmark:
-        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/export_and_edit_table.benchmark.txt"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/export_and_edit_table.benchmark.log"
     threads:
         1
     resources:
         mem_mb = 1000,
         runtime = "1h"
     shell:
-        "python {params.script} --input-path {input.table} "
-        "--output-path {output.folder} "
-        "--new-filename {params.name} && "
-        "biom convert -i {output.biom} -o {output.table} --to-tsv && "
-        "(tail -n +3 {output.table} > {output.edited}) &> {log} || echo \"[$(date +'%H:%M')]{wildcards.filename} Error at export_and_edit_table\" >> {params.error_log}"
+        r"""
+        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.rule_name}")
+        if [ "$sqlite_status" = "FAILED" ]; then
+            touch {output.biom} {output.table} {output.edited}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED /dev/null /dev/null
+            rm -f {log}
+            find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
+            exit 0
+        fi
+        stdout_file=$(mktemp)
+        stderr_file=$(mktemp)
+        set +e
+        python {params.script} --input-path {input.table} --output-path {output.folder} --new-filename {params.name} && biom convert -i {output.biom} -o {output.table} --to-tsv && (tail -n +3 {output.table} > {output.edited}) >$stdout_file 2>$stderr_file
+        status=$?
+        set -e
+        if [[ $status -ne 0 ]]; then
+            touch {output.biom} {output.table} {output.edited}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED $stdout_file $stderr_file
+        else
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK $stdout_file $stderr_file
+        fi
+        rm -f $stdout_file $stderr_file
+        rm -f {log}
+        find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
+        """
 
 rule extract_taxonomy:
     localrule: True
@@ -272,35 +441,54 @@ rule extract_taxonomy:
     input:
         primary = f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_alignment.tsv",
         table = f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_table_edit.tsv"
-    output: 
-        f"{run_dir}/{run_name}/6_condensed_wagtail/{{filename}}_condensed.tsv"
+    output:
+        condensed = f"{run_dir}/{run_name}/6_condensed_wagtail/{{filename}}_condensed.tsv"
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     params:
-        #sample name for the extract_taxonomy.py script -> needed for the script
         sample = "{filename}",
-        #defining the used script for this rule
         script = f"{script_dir}/extract_taxonomy_danica.py",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp()}_status.log" # To store any error within the pipeline
+        sqlite_db = sqlite_db_path,
+        rule_name = "extract_taxonomy",
+        logger = f"{script_dir}/wagtail_sqlite_logger.py",
+        checker = f"{script_dir}/check_sqlite_status.py"
     conda:
         "envs/mappy.yaml"
     log:
         f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/extract_taxonomy.log"
     benchmark:
-        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/extract_taxonomy.benchmark.txt"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/extract_taxonomy.benchmark.log"
     threads:
         1
     resources:
         mem_mb = 160,
         runtime = "1h"
     shell:
-        "export TMPDIR=$(mktemp -d) && "
-        "python {params.script} -i {input.primary} "
-        "-t {input.table} "
-        "-o {output} "
-        "-s {params.sample} &> {log} || "
-        "echo \"[$(date +'%H:%M')]{wildcards.filename} Error at extract_taxonomy\" >> {params.error_log} && "
-        "rm -rf $TMPDIR"
+        r"""
+        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.rule_name}")
+        if [ "$sqlite_status" = "FAILED" ]; then
+            echo "FAILED" > {output.condensed}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED /dev/null /dev/null
+            rm -f {log}
+            find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
+            exit 0
+        fi
+        stdout_file=$(mktemp)
+        stderr_file=$(mktemp)
+        set +e
+        python {params.script} -i {input.primary} -t {input.table} -o {output.condensed} -s {params.sample} >$stdout_file 2>$stderr_file
+        status=$?
+        set -e
+        if [[ $status -ne 0 ]]; then
+            touch {output.condensed}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED $stdout_file $stderr_file
+        else
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK $stdout_file $stderr_file
+        fi
+        rm -f $stdout_file $stderr_file
+        rm -f {log}
+        find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
+        """
 
 rule qiime_stats:
     localrule: True
@@ -316,23 +504,59 @@ rule qiime_stats:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     params:
-        #defining the used script for this rule
         script = f"{script_dir}/wagtail_metadata_qiimes.py",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp()}_status.log" # To store any error within the pipeline
+        sqlite_db = sqlite_db_path,
+        rule_name = "qiime_stats",
+        logger = f"{script_dir}/wagtail_sqlite_logger.py",
+        checker = f"{script_dir}/check_sqlite_status.py"
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
         f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/qiime_stats.log"
     benchmark:
-        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/qiime_stats.benchmark.txt"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/qiime_stats.benchmark.log"
     threads:
         1
     resources:
         mem_mb = 640,
         runtime = "1h"
     shell:
-        "python {params.script} --input-qc {input.qc} --output-qc {output.qc_dir} "
-        "--input-deblur {input.deblur} --output-deblur {output.deblur_dir} &> {log} || echo \"[$(date +'%H:%M')]{wildcards.filename} Error at qiime_stats\" >> {params.error_log}"
+        r"""
+        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.rule_name}")
+        stdout_file=$(mktemp)
+        stderr_file=$(mktemp)
+        if [ "$sqlite_status" = "FAILED" ]; then
+            echo "Upstream stats missing, skipping qiime_stats" > {output.final_qc}
+            echo "Upstream stats missing, skipping qiime_stats" > {output.final_deblur}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED $stdout_file $stderr_file
+            rm -f $stdout_file $stderr_file
+            rm -f {log}
+            find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
+            exit 0
+        fi
+        # For qiime_stats, check both inputs are present and non-empty
+        if [ ! -s {input.qc} ] || [ ! -s {input.deblur} ]; then
+            echo "Upstream stats missing, skipping qiime_stats" > {output.final_qc}
+            echo "Upstream stats missing, skipping qiime_stats" > {output.final_deblur}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED $stdout_file $stderr_file
+            rm -f $stdout_file $stderr_file
+            rm -f {log}
+            find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
+            exit 0
+        fi
+        set +e
+        python {params.script} --input-qc {input.qc} --output-qc {output.qc_dir} --input-deblur {input.deblur} --output-deblur {output.deblur_dir} >$stdout_file 2>$stderr_file
+        status=$?
+        set -e
+        if [[ $status -ne 0 ]]; then
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED $stdout_file $stderr_file
+        else
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK $stdout_file $stderr_file
+        fi
+        rm -f $stdout_file $stderr_file
+        rm -f {log}
+        find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
+        """
 
 rule metadata_creation:
     localrule: True
@@ -347,54 +571,96 @@ rule metadata_creation:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     params:
-        #defining the used script for this rule
         script = f"{script_dir}/wagtail_metadata_meta_combine.py",
         run = "{filename}",
-        error_log = f"{run_dir}/{run_name}/0_logs_wagtail/{generate_timestamp()}_status.log" # To store any error within the pipeline
+        sqlite_db = sqlite_db_path,
+        rule_name = "metadata_creation",
+        logger = f"{script_dir}/wagtail_sqlite_logger.py",
+        checker = f"{script_dir}/check_sqlite_status.py"
     conda:
         "envs/mappy.yaml"
     log:
         f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/metadata.log"
     benchmark:
-        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/metadata.benchmark.txt"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/metadata.benchmark.log"
     threads:
         1
     resources:
         mem_mb = 320,
         runtime = "1h"
     shell:
-        "python {params.script} --qc-file {input.final_qc} --deblur-file {input.final_deblur} "
-        "--mappy-file {input.final_mappy} --output-path {output.directory} "
-        "--run-name {params.run} &> {log} || echo \"[$(date +'%H:%M')]{wildcards.filename} Error at metadata\" >> {params.error_log}"
+        r"""
+        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.rule_name}")
+        stdout_file=$(mktemp)
+        stderr_file=$(mktemp)
+        if [ "$sqlite_status" = "FAILED" ]; then
+            mkdir -p {output.directory}
+            echo "ERROR: metadata_creation failed for {wildcards.filename}" > {output.final}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED $stdout_file $stderr_file
+            rm -f $stdout_file $stderr_file
+            rm -f {log}
+            find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
+            exit 0
+        fi
+        set +e
+        python {params.script} --qc-file {input.final_qc} --deblur-file {input.final_deblur} --mappy-file {input.final_mappy} --output-path {output.directory} --run-name {params.run} >$stdout_file 2>$stderr_file
+        status=$?
+        set -e
+        if [[ $status -ne 0 ]]; then
+            echo "ERROR: metadata_creation failed for {wildcards.filename}" > {output.final}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED $stdout_file $stderr_file
+        else
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK $stdout_file $stderr_file
+        fi
+        rm -f $stdout_file $stderr_file
+        rm -f {log}
+        find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
+        """
 
 rule clean_intermidiates:
     localrule: True
-#rule to clean every in-between result after metadata for each filename is created. cleaning target is 1_* until 5_*
+    #rule to clean every in-between result after metadata for each filename is created. cleaning target is 1_* until 5_*
     input:
         metadata = expand(f"{run_dir}/{run_name}/7_metadata/{{filename}}/{{filename}}_metadata.tsv", filename = filenames),
         community = expand(f"{run_dir}/{run_name}/6_condensed_wagtail/{{filename}}_condensed.tsv", filename = filenames)
     output:
-        touch(f"{run_dir}/{run_name}/cleanup_done.txt")
+        touch(f"{run_dir}/{run_name}/0_logs_wagtail/cleanup_done.txt")
     wildcard_constraints:
-        filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
+        filename = r"[^\.]+"
     conda:
         "envs/mappy.yaml"
-    params:
-        target = f"{run_dir}/{run_name}/"
+    log:
+        f"{run_dir}/{run_name}/0_logs_wagtail/cleaning.log"
     threads:
         1
     resources:
         mem_mb = 160,
         runtime = "1h"
+    params:
+        target = f"{run_dir}/{run_name}/"
     shell:
-        "rm -rf {params.target}/[1-5]_* && touch {output}"
+        r"""
+        # Remove blank or FAILED condensed files
+        for f in {run_dir}/{run_name}/6_condensed_wagtail/*_condensed.tsv; do
+            # Remove if file is empty
+            if [ ! -s "$f" ]; then
+                rm -f "$f"
+                continue
+            fi
+            # Remove if file contains only the word FAILED (from soft fail)
+            if grep -q "^FAILED" "$f"; then
+                rm -f "$f"
+            fi
+        done
+        (rm -rf {params.target}/[1-5]_*) &> {log}
+        """ 
 
 rule metadata_combine:
     localrule: True
 #combine all metadata files into one
     input:
         metadata = expand(f"{run_dir}/{run_name}/7_metadata/{{filename}}/{{filename}}_metadata.tsv", filename = filenames),
-        cleanup = f"{run_dir}/{run_name}/cleanup_done.txt"
+        cleanup = f"{run_dir}/{run_name}/0_logs_wagtail/cleanup_done.txt"
     output:
         f"{run_dir}/{run_name}/7_metadata/{run_name}_full_metadata.tsv"
     wildcard_constraints:
@@ -402,13 +668,11 @@ rule metadata_combine:
     conda:
         "envs/mappy.yaml"
     log:
-        f"{run_dir}/{run_name}/0_logs_wagtail/full_metadata_wagtail.log"
-    benchmark:
-        f"{run_dir}/{run_name}/0_logs_wagtail/full_metadata_wagtail.benchmark.txt"
+        f"{run_dir}/{run_name}/0_logs_wagtail/full_metadata.log"
     threads:
         1
     resources:
         mem_mb = 160,
         runtime = "1h"
     shell:
-        "head -n 1 {input.metadata[0]} > {output} && tail -n +2 -q {input.metadata} >> {output} &> {log}"
+        "(head -n 1 {input.metadata[0]} > {output} && tail -n +2 -q {input.metadata} >> {output}) &> {log}"
