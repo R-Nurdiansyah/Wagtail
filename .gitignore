@@ -16,3 +16,6 @@ work
 *.ipnyb
 development/
 run/
+# pixi environments
+.pixi
+*.egg-info

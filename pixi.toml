@@ -1,0 +1,13 @@
+[workspace]
+authors = ["R-Nurdiansyah <rizky.nurdiansyah@hdr.qut.edu.au>"]
+channels = ["conda-forge", "bioconda"]
+name = "wagtail"
+platforms = ["linux-64"]
+version = "0.1.0"
+
+[tasks]
+
+[dependencies]
+snakemake = ">=9.5.0,<10"
+graphviz = ">=12.2.1,<13"
+snakemake-executor-plugin-cluster-generic = ">=1.0.9,<2"
