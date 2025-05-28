@@ -1,4 +1,4 @@
-#snakemake file for wagtail pipeline version 0.11 (soft fail works, and the sqlite database is created as logging)
+#snakemake file for wagtail pipeline version 0.12 (sqlite database retry mechanism, less deleting of logs, grouping jobs for cluster, no more racing situation for QIIME, and more robust error handling)
 
 ###tools import###
 import os
@@ -28,7 +28,7 @@ def generate_timestamp():
     return datetime.now().strftime('%Y%m%d')
 
 timestamp = generate_timestamp()
-sqlite_db_path = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{timestamp}_log.db"
+sqlite_db_path = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{timestamp}_log.sql"
 
 ###rules###
 #rule all to run all the rules at once
@@ -39,8 +39,8 @@ rule all:
     localrule: True
 
 rule manifest:
-    localrule: True
-#read the data in filenames and check with file map
+    group: "initialize"
+    #read the data in filenames and check with file map
 #create manifest file for each accession, single end data only
     input:
         #list of filenames and filemap
@@ -72,33 +72,23 @@ rule manifest:
         runtime = "1h"
     shell:
         r"""
-        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.rule_name}")
-        if [ "$sqlite_status" = "FAILED" ]; then
-            touch {output.manifest}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED /dev/null /dev/null
-            rm -f {log}
-            find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
-            exit 0
-        fi
-        stdout_file=$(mktemp)
-        stderr_file=$(mktemp)
+        # No need to check sqlite_status for the first rule
         set +e
-        python {params.script} --input {params.sample} --file-map {input.filemap} --output {output.output_dir} >$stdout_file 2>$stderr_file
+        python {params.script} --input {params.sample} --file-map {input.filemap} --output {output.output_dir} &> {log}
         status=$?
         set -e
         if [[ $status -ne 0 ]]; then
             touch {output.manifest}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED $stdout_file $stderr_file
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
         else
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK $stdout_file $stderr_file
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log}
         fi
-        rm -f $stdout_file $stderr_file
-        rm -f {log}
+        sleep 2
         find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
         """
 
 rule qiime2_import:
-    localrule: True
+    group: "initialize"
     input:
         manifest = f"{run_dir}/{run_name}/0_manifest/{{filename}}/{{filename}}_manifest.csv"
     output:
@@ -108,6 +98,8 @@ rule qiime2_import:
     params:
         sqlite_db = sqlite_db_path,
         rule_name = "qiime2_import",
+        upstream_rule = "manifest",
+        tmpdir = f"{run_dir}/{run_name}/0_tmp/{{filename}}",
         logger = f"{script_dir}/wagtail_sqlite_logger.py",
         checker = f"{script_dir}/check_sqlite_status.py"
     conda:
@@ -123,33 +115,31 @@ rule qiime2_import:
         runtime = "1h"
     shell:
         r"""
-        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.rule_name}")
+        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.upstream_rule}")
         if [ "$sqlite_status" = "FAILED" ]; then
             touch {output.qza}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED /dev/null /dev/null
-            rm -f {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
             exit 0
         fi
-        stdout_file=$(mktemp)
-        stderr_file=$(mktemp)
+        export TMPDIR={params.tmpdir}
+        mkdir -p $TMPDIR
         set +e
-        qiime tools import --type 'SampleData[SequencesWithQuality]' --input-path {input.manifest} --input-format SingleEndFastqManifestPhred33 --output-path {output.qza} >$stdout_file 2>$stderr_file
+        qiime tools import --type 'SampleData[SequencesWithQuality]' --input-path {input.manifest} --input-format SingleEndFastqManifestPhred33 --output-path {output.qza} &> {log}
         status=$?
         set -e
         if [[ $status -ne 0 ]]; then
             touch {output.qza}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED $stdout_file $stderr_file
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
         else
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK $stdout_file $stderr_file
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log}
         fi
-        rm -f $stdout_file $stderr_file
-        rm -f {log}
+        sleep 2
         find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
         """
 
 rule quality_control:
-    group: "deblur"
+    group: "initialize"
     #run the quality control using qiime2 quality-filter q-score
     input: 
         qza = f"{run_dir}/{run_name}/1_import_wagtail/{{filename}}-single.qza"
@@ -161,6 +151,8 @@ rule quality_control:
     params:
         sqlite_db = sqlite_db_path,
         rule_name = "quality_control",
+        upstream_rule = "qiime2_import",
+        tmpdir = f"{run_dir}/{run_name}/0_tmp/{{filename}}",
         logger = f"{script_dir}/wagtail_sqlite_logger.py",
         checker = f"{script_dir}/check_sqlite_status.py"
     conda:
@@ -176,35 +168,30 @@ rule quality_control:
         runtime = "1h"
     shell:
         r"""
-        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.rule_name}")
+        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.upstream_rule}")
         if [ "$sqlite_status" = "FAILED" ]; then
             touch {output.filtered} {output.stats}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED /dev/null /dev/null
-            rm -f {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
             exit 0
         fi
-        stdout_file=$(mktemp)
-        stderr_file=$(mktemp)
-        export TMPDIR=$(mktemp -d)
+        export TMPDIR={params.tmpdir}
         set +e
-        qiime quality-filter q-score --i-demux {input.qza} --o-filtered-sequences {output.filtered} --o-filter-stats {output.stats} >$stdout_file 2>$stderr_file
+        qiime quality-filter q-score --i-demux {input.qza} --o-filtered-sequences {output.filtered} --o-filter-stats {output.stats} &> {log}
         status=$?
         set -e
         if [[ $status -ne 0 ]]; then
             touch {output.filtered} {output.stats}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED $stdout_file $stderr_file
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
         else
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK $stdout_file $stderr_file
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log}
         fi
-        rm -rf $TMPDIR
-        rm -f $stdout_file $stderr_file
-        rm -f {log}
+        sleep 2
         find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
         """
 
 rule deblur:
-    group: "deblur"
+    group: "initialize"
 #script version
     input: 
         filtered = f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}-filtered.qza"
@@ -219,6 +206,8 @@ rule deblur:
         script = f"{script_dir}/deblur_all.py",
         sqlite_db = sqlite_db_path,
         rule_name = "deblur",
+        upstream_rule = "quality_control",
+        tmpdir = f"{run_dir}/{run_name}/0_tmp/{{filename}}",
         logger = f"{script_dir}/wagtail_sqlite_logger.py",
         checker = f"{script_dir}/check_sqlite_status.py"
     conda:
@@ -234,36 +223,30 @@ rule deblur:
         runtime = "47h"
     shell:
         r"""
-        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.rule_name}")
+        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.upstream_rule}")
         if [ "$sqlite_status" = "FAILED" ]; then
             touch {output.representative} {output.table} {output.stats}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED /dev/null /dev/null
-            rm -f {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
             exit 0
         fi
-        stdout_file=$(mktemp)
-        stderr_file=$(mktemp)
-        export TMPDIR=$(mktemp -d)
+        export TMPDIR={params.tmpdir}
         set +e
-        python {params.script} -i {input.filtered} -o {output.path} -t {threads} \
-            -r {output.representative} -a {output.table} -s {output.stats} >$stdout_file 2>$stderr_file
+        python {params.script} -i {input.filtered} -o {output.path} -t {threads} -r {output.representative} -a {output.table} -s {output.stats} &> {log}
         status=$?
         set -e
         if [[ $status -ne 0 ]]; then
             touch {output.representative} {output.table} {output.stats}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED $stdout_file $stderr_file
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
         else
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK $stdout_file $stderr_file
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log}
         fi
-        rm -rf $TMPDIR
-        rm -f $stdout_file $stderr_file
-        rm -f {log}
+        sleep 2
         find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
         """
 
 rule export_seqs:
-    group: "mappy"
+    group: "per_sample"
 #export the biom table from the abundance table using the custom script
     input: 
         representative = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-rep-seqs.qza"
@@ -278,6 +261,8 @@ rule export_seqs:
         script = f"{script_dir}/qiime2_seqs_export.py",
         sqlite_db = sqlite_db_path,
         rule_name = "export_seqs",
+        upstream_rule = "deblur",
+        tmpdir = f"{run_dir}/{run_name}/0_tmp/{{filename}}",
         logger = f"{script_dir}/wagtail_sqlite_logger.py",
         checker = f"{script_dir}/check_sqlite_status.py"
     log:
@@ -291,35 +276,30 @@ rule export_seqs:
         runtime = "1h"
     shell:
         r"""
-        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.rule_name}")
+        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.upstream_rule}")
         if [ "$sqlite_status" = "FAILED" ]; then
             touch {output.final}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED /dev/null /dev/null
-            rm -f {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
             exit 0
         fi
-        stdout_file=$(mktemp)
-        stderr_file=$(mktemp)
-        export TMPDIR=$(mktemp -d)
+        export TMPDIR={params.tmpdir}
         set +e
-        python {params.script} --input-path {input.representative} --output-path {output.output} >$stdout_file 2>$stderr_file
+        python {params.script} --input-path {input.representative} --output-path {output.output} &> {log}
         status=$?
         set -e
         if [[ $status -ne 0 ]]; then
             touch {output.final}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED $stdout_file $stderr_file
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
         else
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK $stdout_file $stderr_file
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log}
         fi
-        rm -rf $TMPDIR
-        rm -f $stdout_file $stderr_file
-        rm -f {log}
+        sleep 2
         find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
         """
 
 rule mappy:
-    group: "mappy"
+    group: "per_sample"
     input:
         #as the product is one file, we can use single input
         F = f"{run_dir}/{run_name}/4_rep_seqs_wagtail/{{filename}}/dna-sequences.fasta",
@@ -338,6 +318,7 @@ rule mappy:
         sample = "{filename}",
         sqlite_db = sqlite_db_path,
         rule_name = "mappy",
+        upstream_rule = "export_seqs",
         logger = f"{script_dir}/wagtail_sqlite_logger.py",
         checker = f"{script_dir}/check_sqlite_status.py"
     log:
@@ -351,33 +332,29 @@ rule mappy:
         runtime = "24h"
     shell:
         r"""
-        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.rule_name}")
+        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.upstream_rule}")
         if [ "$sqlite_status" = "FAILED" ]; then
             touch {output.align} {output.meta}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED /dev/null /dev/null
-            rm -f {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
             exit 0
         fi
-        stdout_file=$(mktemp)
-        stderr_file=$(mktemp)
         set +e
-        python {params.script} -i {input.F} -r {input.ref} -a {output.align} -m {output.meta} -s {params.sample} >$stdout_file 2>$stderr_file
+        python {params.script} -i {input.F} -r {input.ref} -a {output.align} -m {output.meta} -s {params.sample} &> {log}
         status=$?
         set -e
         if [[ $status -ne 0 ]]; then
             touch {output.align} {output.meta}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED $stdout_file $stderr_file
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
         else
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK $stdout_file $stderr_file
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log}
         fi
-        rm -f $stdout_file $stderr_file
-        rm -f {log}
+        sleep 2
         find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
         """
 
 rule export_and_edit_table:
-    localrule: True
+    group: "per_sample"
 #export the biom table from the abundance table using the custom script
     input: 
         table = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-table.qza"
@@ -397,6 +374,8 @@ rule export_and_edit_table:
         name = "{filename}.biom",
         sqlite_db = sqlite_db_path,
         rule_name = "export_and_edit_table",
+        upstream_rule = "deblur",
+        tmpdir = f"{run_dir}/{run_name}/0_tmp/{{filename}}",
         logger = f"{script_dir}/wagtail_sqlite_logger.py",
         checker = f"{script_dir}/check_sqlite_status.py"
     log:
@@ -410,33 +389,30 @@ rule export_and_edit_table:
         runtime = "1h"
     shell:
         r"""
-        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.rule_name}")
+        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.upstream_rule}")
         if [ "$sqlite_status" = "FAILED" ]; then
             touch {output.biom} {output.table} {output.edited}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED /dev/null /dev/null
-            rm -f {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
             exit 0
         fi
-        stdout_file=$(mktemp)
-        stderr_file=$(mktemp)
+        export TMPDIR={params.tmpdir}
         set +e
-        python {params.script} --input-path {input.table} --output-path {output.folder} --new-filename {params.name} && biom convert -i {output.biom} -o {output.table} --to-tsv && (tail -n +3 {output.table} > {output.edited}) >$stdout_file 2>$stderr_file
+        python {params.script} --input-path {input.table} --output-path {output.folder} --new-filename {params.name} && biom convert -i {output.biom} -o {output.table} --to-tsv && (tail -n +3 {output.table} > {output.edited}) &> {log}
         status=$?
         set -e
         if [[ $status -ne 0 ]]; then
             touch {output.biom} {output.table} {output.edited}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED $stdout_file $stderr_file
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
         else
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK $stdout_file $stderr_file
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log}
         fi
-        rm -f $stdout_file $stderr_file
-        rm -f {log}
+        sleep 2
         find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
         """
 
 rule extract_taxonomy:
-    localrule: True
+    group: "per_sample"
 #extract taxonomy data based on the database and format the output for filling the taxonomy
     input:
         primary = f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_alignment.tsv",
@@ -450,6 +426,7 @@ rule extract_taxonomy:
         script = f"{script_dir}/extract_taxonomy_danica.py",
         sqlite_db = sqlite_db_path,
         rule_name = "extract_taxonomy",
+        upstream_rule = "mappy",
         logger = f"{script_dir}/wagtail_sqlite_logger.py",
         checker = f"{script_dir}/check_sqlite_status.py"
     conda:
@@ -465,33 +442,29 @@ rule extract_taxonomy:
         runtime = "1h"
     shell:
         r"""
-        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.rule_name}")
+        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.upstream_rule}")
         if [ "$sqlite_status" = "FAILED" ]; then
             echo "FAILED" > {output.condensed}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED /dev/null /dev/null
-            rm -f {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
             exit 0
         fi
-        stdout_file=$(mktemp)
-        stderr_file=$(mktemp)
         set +e
-        python {params.script} -i {input.primary} -t {input.table} -o {output.condensed} -s {params.sample} >$stdout_file 2>$stderr_file
+        python {params.script} -i {input.primary} -t {input.table} -o {output.condensed} -s {params.sample} &> {log}
         status=$?
         set -e
         if [[ $status -ne 0 ]]; then
             touch {output.condensed}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED $stdout_file $stderr_file
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
         else
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK $stdout_file $stderr_file
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log}
         fi
-        rm -f $stdout_file $stderr_file
-        rm -f {log}
+        sleep 2
         find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
         """
 
 rule qiime_stats:
-    localrule: True
+    group: "per_sample"
 #wrote the metadata for the run
     input: 
         qc = f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}-qc-stats.qza",
@@ -507,6 +480,7 @@ rule qiime_stats:
         script = f"{script_dir}/wagtail_metadata_qiimes.py",
         sqlite_db = sqlite_db_path,
         rule_name = "qiime_stats",
+        upstream_rule = "deblur",
         logger = f"{script_dir}/wagtail_sqlite_logger.py",
         checker = f"{script_dir}/check_sqlite_status.py"
     conda:
@@ -522,15 +496,11 @@ rule qiime_stats:
         runtime = "1h"
     shell:
         r"""
-        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.rule_name}")
-        stdout_file=$(mktemp)
-        stderr_file=$(mktemp)
+        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.upstream_rule}")
         if [ "$sqlite_status" = "FAILED" ]; then
             echo "Upstream stats missing, skipping qiime_stats" > {output.final_qc}
             echo "Upstream stats missing, skipping qiime_stats" > {output.final_deblur}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED $stdout_file $stderr_file
-            rm -f $stdout_file $stderr_file
-            rm -f {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
             exit 0
         fi
@@ -538,28 +508,26 @@ rule qiime_stats:
         if [ ! -s {input.qc} ] || [ ! -s {input.deblur} ]; then
             echo "Upstream stats missing, skipping qiime_stats" > {output.final_qc}
             echo "Upstream stats missing, skipping qiime_stats" > {output.final_deblur}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED $stdout_file $stderr_file
-            rm -f $stdout_file $stderr_file
-            rm -f {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
             exit 0
         fi
+        export TMPDIR={params.tmpdir}
         set +e
-        python {params.script} --input-qc {input.qc} --output-qc {output.qc_dir} --input-deblur {input.deblur} --output-deblur {output.deblur_dir} >$stdout_file 2>$stderr_file
+        python {params.script} --input-qc {input.qc} --output-qc {output.qc_dir} --input-deblur {input.deblur} --output-deblur {output.deblur_dir} &> {log}
         status=$?
         set -e
         if [[ $status -ne 0 ]]; then
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED $stdout_file $stderr_file
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
         else
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK $stdout_file $stderr_file
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log}
         fi
-        rm -f $stdout_file $stderr_file
-        rm -f {log}
+        sleep 2
         find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
         """
 
 rule metadata_creation:
-    localrule: True
+    group: "per_sample"
 #wrote the metadata for the run
     input: 
         final_qc = f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}/stats.csv",
@@ -575,6 +543,8 @@ rule metadata_creation:
         run = "{filename}",
         sqlite_db = sqlite_db_path,
         rule_name = "metadata_creation",
+        upstream_rule = "qiime_stats",
+        tmpdir = f"{run_dir}/{run_name}/0_tmp/{{filename}}",
         logger = f"{script_dir}/wagtail_sqlite_logger.py",
         checker = f"{script_dir}/check_sqlite_status.py"
     conda:
@@ -590,30 +560,26 @@ rule metadata_creation:
         runtime = "1h"
     shell:
         r"""
-        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.rule_name}")
-        stdout_file=$(mktemp)
-        stderr_file=$(mktemp)
+        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.upstream_rule}")
         if [ "$sqlite_status" = "FAILED" ]; then
             mkdir -p {output.directory}
             echo "ERROR: metadata_creation failed for {wildcards.filename}" > {output.final}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED $stdout_file $stderr_file
-            rm -f $stdout_file $stderr_file
-            rm -f {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}  
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
             exit 0
         fi
         set +e
-        python {params.script} --qc-file {input.final_qc} --deblur-file {input.final_deblur} --mappy-file {input.final_mappy} --output-path {output.directory} --run-name {params.run} >$stdout_file 2>$stderr_file
+        python {params.script} --qc-file {input.final_qc} --deblur-file {input.final_deblur} --mappy-file {input.final_mappy} --output-path {output.directory} --run-name {params.run} &> {log}
         status=$?
         set -e
         if [[ $status -ne 0 ]]; then
             echo "ERROR: metadata_creation failed for {wildcards.filename}" > {output.final}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED $stdout_file $stderr_file
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
         else
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK $stdout_file $stderr_file
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log}
         fi
-        rm -f $stdout_file $stderr_file
-        rm -f {log}
+        rm -rf {params.tmpdir}  # Clean up temporary directory
+        sleep 2
         find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.db" -delete
         """
 

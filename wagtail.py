@@ -11,25 +11,14 @@ def main():
 
     sys.argv = ["snakemake"] + args
 
-    # Try direct CLI entry points, fallback to runpy
+    # Only use runpy to run snakemake as a module
+    import runpy
     try:
-        # Snakemake >=9.x
-        from snakemake.app.main import main as snakemake_main
-        snakemake_main()
-    except ImportError:
-        try:
-            # Snakemake 6.x–8.x
-            from snakemake.cli.main import main as snakemake_main
-            snakemake_main()
-        except ImportError:
-            # Fallback: run snakemake as a module
-            import runpy
-            try:
-                runpy.run_module("snakemake", run_name="__main__")
-            except Exception as e:
-                print("Could not run snakemake CLI. Please check your Snakemake installation.", file=sys.stderr)
-                print(str(e), file=sys.stderr)
-                sys.exit(1)
+        runpy.run_module("snakemake", run_name="__main__")
+    except Exception as e:
+        print("Could not run snakemake CLI. Please check your Snakemake installation.", file=sys.stderr)
+        print(str(e), file=sys.stderr)
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
