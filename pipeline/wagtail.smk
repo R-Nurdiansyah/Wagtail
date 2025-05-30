@@ -597,6 +597,10 @@ rule merge_logs:
         dbs = expand(f"{run_dir}/{run_name}/0_tmp/{{filename}}_log.sql", filename=filenames)
     output:
         merged = sqlite_db_path
+    wildcard_constraints:
+        filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
+    params:
+        script = f"{script_dir}/sql.merge.py",
     conda:
         "envs/mappy.yaml"
     log:
@@ -605,28 +609,10 @@ rule merge_logs:
         1
     shell:
         r"""
-        # Create merged database and logs table if not exists
         touch {input.metadata[0]}  # Ensure the first metadata file exists
         touch {input.community[0]}  # Ensure the first community file exists
-        sqlite3 {output.merged} "CREATE TABLE IF NOT EXISTS logs (id TEXT, rule TEXT, outcome TEXT, log TEXT);"
-        # Merge all per-sample logs, but skip if db does not exist or is empty
-        for db in {input.dbs}; do
-            if [ -s "$db" ]; then
-                count=$(sqlite3 "$db" "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='logs';")
-                if [ "$count" = "1" ]; then
-                    nrows=$(sqlite3 "$db" "SELECT count(*) FROM logs;")
-                    if [ "$nrows" -gt 0 ]; then
-                        # Use a transaction for better performance and reliability
-                        sqlite3 {output.merged} "BEGIN;"
-                        sqlite3 {output.merged} "ATTACH DATABASE '$db' AS to_merge; INSERT INTO logs SELECT * FROM to_merge.logs; DETACH DATABASE to_merge;"
-                        sqlite3 {output.merged} "COMMIT;"
-                    fi
-                fi
-            fi
-        done
-        # Wait a bit to ensure file system sync (especially on network filesystems)
-        sync
-        sleep 1
+        python {params.script} {output.merged} {input.dbs} &> {log}
+        sleep 2
         """
 
 rule clean_intermidiates:
