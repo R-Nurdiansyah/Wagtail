@@ -543,11 +543,11 @@ rule metadata_creation:
     output: 
         directory = directory(f"{run_dir}/{run_name}/7_metadata/{{filename}}"),
         final = f"{run_dir}/{run_name}/7_metadata/{{filename}}/{{filename}}_metadata.tsv",
-        sqlite_db = f"{run_dir}/{run_name}/0_tmp/{{filename}}_log.sql"
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     params:
         script = f"{script_dir}/wagtail_metadata_meta_combine.py",
+        sqlite_db = f"{run_dir}/{run_name}/0_tmp/{{filename}}_log.sql",
         run = "{filename}",
         rule_name = "metadata_creation",
         upstream_rule = "qiime_stats",
@@ -567,11 +567,11 @@ rule metadata_creation:
         runtime = "1h"
     shell:
         r"""
-        sqlite_status=$(python {params.checker} {output.sqlite_db} "{wildcards.filename}" "{params.upstream_rule}")
+        sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.upstream_rule}")
         if [ "$sqlite_status" = "FAILED" ]; then
             mkdir -p {output.directory}
             echo "ERROR: metadata_creation failed for {wildcards.filename}" > {output.final}
-            python {params.logger} {output.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}  
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}  
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
             exit 0
         fi
@@ -581,9 +581,9 @@ rule metadata_creation:
         set -e
         if [[ $status -ne 0 ]]; then
             echo "ERROR: metadata_creation failed for {wildcards.filename}" > {output.final}
-            python {params.logger} {output.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
         else
-            python {params.logger} {output.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log}
         fi
         sleep 2
         find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
@@ -594,13 +594,13 @@ rule merge_logs:
     input:
         metadata = expand(f"{run_dir}/{run_name}/7_metadata/{{filename}}/{{filename}}_metadata.tsv", filename = filenames),
         community = expand(f"{run_dir}/{run_name}/6_condensed_wagtail/{{filename}}_condensed.tsv", filename = filenames),
-        dbs = expand(f"{run_dir}/{run_name}/0_tmp/{{filename}}_log.sql", filename=filenames)
     output:
         merged = sqlite_db_path
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     params:
         script = f"{script_dir}/sql_merge.py",
+        dbs = expand(f"{run_dir}/{run_name}/0_tmp/{{filename}}_log.sql", filename=filenames)
     conda:
         "envs/mappy.yaml"
     log:
@@ -611,7 +611,7 @@ rule merge_logs:
         r"""
         touch {input.metadata[0]}  # Ensure the first metadata file exists
         touch {input.community[0]}  # Ensure the first community file exists
-        python {params.script} {output.merged} {input.dbs} &> {log}
+        python {params.script} {output.merged} {params.dbs} &> {log}
         sleep 2
         """
 
