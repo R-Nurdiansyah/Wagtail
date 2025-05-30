@@ -600,7 +600,7 @@ rule merge_logs:
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     params:
-        script = f"{script_dir}/sql.merge.py",
+        script = f"{script_dir}/sql_merge.py",
     conda:
         "envs/mappy.yaml"
     log:
