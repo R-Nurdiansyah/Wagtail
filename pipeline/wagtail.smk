@@ -124,6 +124,7 @@ rule qiime2_import:
         sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.upstream_rule}")
         if [ "$sqlite_status" = "FAILED" ]; then
             touch {output.qza}
+            echo "Upstream fails" > {log}
             python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
             exit 0
@@ -177,6 +178,7 @@ rule quality_control:
         sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.upstream_rule}")
         if [ "$sqlite_status" = "FAILED" ]; then
             touch {output.filtered} {output.stats}
+            echo "Upstream fails" > {log}
             python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
             exit 0
@@ -232,6 +234,7 @@ rule deblur:
         sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.upstream_rule}")
         if [ "$sqlite_status" = "FAILED" ]; then
             touch {output.representative} {output.table} {output.stats}
+            echo "Upstream fails" > {log}
             python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
             exit 0
@@ -285,6 +288,7 @@ rule export_seqs:
         sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.upstream_rule}")
         if [ "$sqlite_status" = "FAILED" ]; then
             touch {output.final}
+            echo "Upstream fails" > {log}
             python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
             exit 0
@@ -341,6 +345,7 @@ rule mappy:
         sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.upstream_rule}")
         if [ "$sqlite_status" = "FAILED" ]; then
             touch {output.align} {output.meta}
+            echo "Upstream fails" > {log}
             python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
             exit 0
@@ -398,6 +403,7 @@ rule export_and_edit_table:
         sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.upstream_rule}")
         if [ "$sqlite_status" = "FAILED" ]; then
             touch {output.biom} {output.table} {output.edited}
+            echo "Upstream fails" > {log}
             python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
             exit 0
@@ -450,7 +456,8 @@ rule extract_taxonomy:
         r"""
         sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.upstream_rule}")
         if [ "$sqlite_status" = "FAILED" ]; then
-            echo "FAILED" > {output.condensed}
+            touch {output.condensed}
+            echo "Upstream fails" > {log}
             python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
             exit 0
@@ -505,16 +512,16 @@ rule qiime_stats:
         r"""
         sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.upstream_rule}")
         if [ "$sqlite_status" = "FAILED" ]; then
-            echo "Upstream stats missing, skipping qiime_stats" > {output.final_qc}
-            echo "Upstream stats missing, skipping qiime_stats" > {output.final_deblur}
+            touch {output.final_qc} {output.final_deblur}
+            echo "Upstream fails" > {log}
             python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
             exit 0
         fi
         # For qiime_stats, check both inputs are present and non-empty
         if [ ! -s {input.qc} ] || [ ! -s {input.deblur} ]; then
-            echo "Upstream stats missing, skipping qiime_stats" > {output.final_qc}
-            echo "Upstream stats missing, skipping qiime_stats" > {output.final_deblur}
+            touch {output.final_qc} {output.final_deblur}
+            echo "Upstream fails" > {log}
             python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
             exit 0
@@ -570,7 +577,8 @@ rule metadata_creation:
         sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.upstream_rule}")
         if [ "$sqlite_status" = "FAILED" ]; then
             mkdir -p {output.directory}
-            echo "ERROR: metadata_creation failed for {wildcards.filename}" > {output.final}
+            touch {output.final}
+            echo "Upstream fails" > {log}
             python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}  
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
             exit 0

@@ -37,7 +37,7 @@ try:
     c = conn.cursor()
     execute_with_retry(
         c,
-        'SELECT status FROM logs WHERE filename=? AND rule=? ORDER BY id DESC LIMIT 1',
+        'SELECT outcome FROM logs WHERE id=? AND rule=? ORDER BY id DESC LIMIT 1',
         (filename, rule)
     )
     row = c.fetchone()
