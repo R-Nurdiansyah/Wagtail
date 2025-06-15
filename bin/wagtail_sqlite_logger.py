@@ -33,6 +33,7 @@ id_ = sys.argv[2]
 rule = sys.argv[3]
 outcome = sys.argv[4]
 log_path = sys.argv[5]  # now only one log file
+note = sys.argv[6]      # new note argument
 
 log = ""
 if os.path.exists(log_path):
@@ -48,14 +49,15 @@ execute_with_retry(
         id TEXT,
         rule TEXT,
         outcome TEXT,
-        log TEXT
+        log TEXT,
+        note TEXT
     )
     """
 )
 execute_with_retry(
     c,
-    "INSERT INTO logs (id, rule, outcome, log) VALUES (?, ?, ?, ?)",
-    (id_, rule, outcome, log)
+    "INSERT INTO logs (id, rule, outcome, log, note) VALUES (?, ?, ?, ?, ?)",
+    (id_, rule, outcome, log, note)
 )
 conn.commit()
 conn.close()

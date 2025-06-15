@@ -15,6 +15,7 @@ def merge_sqlite_logs(merged_db, db_files):
             rule TEXT,
             outcome TEXT,
             log TEXT,
+            note TEXT,
             UNIQUE(id, rule, outcome, log)
         );
     """)

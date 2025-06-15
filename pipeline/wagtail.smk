@@ -1,4 +1,4 @@
-#snakemake file for wagtail pipeline version 0.13 (sqlite separate per sample and then merge in the end)
+#snakemake file for wagtail pipeline version 0.14 (revised the soft fail and adding error annotation)
 
 ###tools import###
 import os
@@ -63,7 +63,8 @@ rule manifest:
         sqlite_db = f"{run_dir}/{run_name}/0_tmp/{{filename}}_log.sql",
         rule_name = "manifest",
         logger = f"{script_dir}/wagtail_sqlite_logger.py",
-        checker = f"{script_dir}/check_sqlite_status.py"
+        checker = f"{script_dir}/check_sqlite_status.py",
+        annotation = f"{script_dir}/error_annotation.py"
     conda:
         "envs/mappy.yaml"
     log:
@@ -84,10 +85,11 @@ rule manifest:
         status=$?
         set -e
         if [[ $status -ne 0 ]]; then
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
             touch {output.manifest}
+            error=$(python {params.annotation} {log} {params.rule_name})
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} "$error"
         else
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log} ""
         fi
         sleep 2
         find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
@@ -107,7 +109,8 @@ rule qiime2_import:
         upstream_rule = "manifest",
         tmpdir = f"{run_dir}/{run_name}/0_tmp/{{filename}}",
         logger = f"{script_dir}/wagtail_sqlite_logger.py",
-        checker = f"{script_dir}/check_sqlite_status.py"
+        checker = f"{script_dir}/check_sqlite_status.py",
+        annotation = f"{script_dir}/error_annotation.py"
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -125,7 +128,7 @@ rule qiime2_import:
         if [ "$sqlite_status" = "FAILED" ]; then
             touch {output.qza}
             echo "Upstream fails" > {log}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} ""
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
             exit 0
         fi
@@ -137,9 +140,10 @@ rule qiime2_import:
         set -e
         if [[ $status -ne 0 ]]; then
             touch {output.qza}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
+            error=$(python {params.annotation} {log} {params.rule_name})
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} "$error"
         else
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log} ""
         fi
         sleep 2
         find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
@@ -161,7 +165,8 @@ rule quality_control:
         upstream_rule = "qiime2_import",
         tmpdir = f"{run_dir}/{run_name}/0_tmp/{{filename}}",
         logger = f"{script_dir}/wagtail_sqlite_logger.py",
-        checker = f"{script_dir}/check_sqlite_status.py"
+        checker = f"{script_dir}/check_sqlite_status.py",
+        annotation = f"{script_dir}/error_annotation.py"
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -179,7 +184,7 @@ rule quality_control:
         if [ "$sqlite_status" = "FAILED" ]; then
             touch {output.filtered} {output.stats}
             echo "Upstream fails" > {log}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} ""
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
             exit 0
         fi
@@ -190,9 +195,10 @@ rule quality_control:
         set -e
         if [[ $status -ne 0 ]]; then
             touch {output.filtered} {output.stats}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
+            error=$(python {params.annotation} {log} {params.rule_name})
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} "$error"
         else
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log} ""
         fi
         sleep 2
         find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
@@ -217,7 +223,8 @@ rule deblur:
         upstream_rule = "quality_control",
         tmpdir = f"{run_dir}/{run_name}/0_tmp/{{filename}}",
         logger = f"{script_dir}/wagtail_sqlite_logger.py",
-        checker = f"{script_dir}/check_sqlite_status.py"
+        checker = f"{script_dir}/check_sqlite_status.py",
+        annotation = f"{script_dir}/error_annotation.py"
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -235,7 +242,7 @@ rule deblur:
         if [ "$sqlite_status" = "FAILED" ]; then
             touch {output.representative} {output.table} {output.stats}
             echo "Upstream fails" > {log}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} ""
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
             exit 0
         fi
@@ -246,9 +253,10 @@ rule deblur:
         set -e
         if [[ $status -ne 0 ]]; then
             touch {output.representative} {output.table} {output.stats}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
+            error=$(python {params.annotation} {log} {params.rule_name})
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} "$error"
         else
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log} ""
         fi
         sleep 2
         find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
@@ -273,7 +281,8 @@ rule export_seqs:
         upstream_rule = "deblur",
         tmpdir = f"{run_dir}/{run_name}/0_tmp/{{filename}}",
         logger = f"{script_dir}/wagtail_sqlite_logger.py",
-        checker = f"{script_dir}/check_sqlite_status.py"
+        checker = f"{script_dir}/check_sqlite_status.py",
+        annotation = f"{script_dir}/error_annotation.py"
     log:
         f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/export_seqs.log"
     benchmark:
@@ -289,7 +298,7 @@ rule export_seqs:
         if [ "$sqlite_status" = "FAILED" ]; then
             touch {output.final}
             echo "Upstream fails" > {log}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} ""
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
             exit 0
         fi
@@ -300,9 +309,10 @@ rule export_seqs:
         set -e
         if [[ $status -ne 0 ]]; then
             touch {output.final}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
+            error=$(python {params.annotation} {log} {params.rule_name})
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} "$error"
         else
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log} ""
         fi
         sleep 2
         find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
@@ -330,7 +340,8 @@ rule mappy:
         rule_name = "mappy",
         upstream_rule = "export_seqs",
         logger = f"{script_dir}/wagtail_sqlite_logger.py",
-        checker = f"{script_dir}/check_sqlite_status.py"
+        checker = f"{script_dir}/check_sqlite_status.py",
+        annotation = f"{script_dir}/error_annotation.py"
     log:
         f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/mappy.log"
     benchmark:
@@ -346,7 +357,7 @@ rule mappy:
         if [ "$sqlite_status" = "FAILED" ]; then
             touch {output.align} {output.meta}
             echo "Upstream fails" > {log}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} ""
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
             exit 0
         fi
@@ -356,9 +367,10 @@ rule mappy:
         set -e
         if [[ $status -ne 0 ]]; then
             touch {output.align} {output.meta}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
+            error=$(python {params.annotation} {log} {params.rule_name})
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} "$error"
         else
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log} ""
         fi
         sleep 2
         find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
@@ -388,7 +400,8 @@ rule export_and_edit_table:
         upstream_rule = "deblur",
         tmpdir = f"{run_dir}/{run_name}/0_tmp/{{filename}}",
         logger = f"{script_dir}/wagtail_sqlite_logger.py",
-        checker = f"{script_dir}/check_sqlite_status.py"
+        checker = f"{script_dir}/check_sqlite_status.py",
+        annotation = f"{script_dir}/error_annotation.py"
     log:
         f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/export_and_edit_table.log"
     benchmark:
@@ -404,7 +417,7 @@ rule export_and_edit_table:
         if [ "$sqlite_status" = "FAILED" ]; then
             touch {output.biom} {output.table} {output.edited}
             echo "Upstream fails" > {log}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} ""
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
             exit 0
         fi
@@ -415,9 +428,10 @@ rule export_and_edit_table:
         set -e
         if [[ $status -ne 0 ]]; then
             touch {output.biom} {output.table} {output.edited}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
+            error=$(python {params.annotation} {log} {params.rule_name})
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} "$error"
         else
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log} ""
         fi
         sleep 2
         find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
@@ -440,7 +454,8 @@ rule extract_taxonomy:
         rule_name = "extract_taxonomy",
         upstream_rule = "mappy",
         logger = f"{script_dir}/wagtail_sqlite_logger.py",
-        checker = f"{script_dir}/check_sqlite_status.py"
+        checker = f"{script_dir}/check_sqlite_status.py",
+        annotation = f"{script_dir}/error_annotation.py"
     conda:
         "envs/mappy.yaml"
     log:
@@ -458,7 +473,7 @@ rule extract_taxonomy:
         if [ "$sqlite_status" = "FAILED" ]; then
             touch {output.condensed}
             echo "Upstream fails" > {log}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} ""
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
             exit 0
         fi
@@ -468,9 +483,10 @@ rule extract_taxonomy:
         set -e
         if [[ $status -ne 0 ]]; then
             touch {output.condensed}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
+            error=$(python {params.annotation} {log} {params.rule_name})
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} "$error"
         else
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log} ""
         fi
         sleep 2
         find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
@@ -496,7 +512,8 @@ rule qiime_stats:
         upstream_rule = "deblur",
         tmpdir = f"{run_dir}/{run_name}/0_tmp/{{filename}}",
         logger = f"{script_dir}/wagtail_sqlite_logger.py",
-        checker = f"{script_dir}/check_sqlite_status.py"
+        checker = f"{script_dir}/check_sqlite_status.py",
+        annotation = f"{script_dir}/error_annotation.py"
     conda:
         "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
     log:
@@ -514,7 +531,7 @@ rule qiime_stats:
         if [ "$sqlite_status" = "FAILED" ]; then
             touch {output.final_qc} {output.final_deblur}
             echo "Upstream fails" > {log}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} ""
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
             exit 0
         fi
@@ -522,7 +539,7 @@ rule qiime_stats:
         if [ ! -s {input.qc} ] || [ ! -s {input.deblur} ]; then
             touch {output.final_qc} {output.final_deblur}
             echo "Upstream fails" > {log}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} ""
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
             exit 0
         fi
@@ -532,9 +549,11 @@ rule qiime_stats:
         status=$?
         set -e
         if [[ $status -ne 0 ]]; then
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
+            touch {output.final_qc} {output.final_deblur}
+            error=$(python {params.annotation} {log} {params.rule_name})
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} "$error"
         else
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log} ""
         fi
         sleep 2
         find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
@@ -560,7 +579,8 @@ rule metadata_creation:
         upstream_rule = "qiime_stats",
         tmpdir = f"{run_dir}/{run_name}/0_tmp/{{filename}}",
         logger = f"{script_dir}/wagtail_sqlite_logger.py",
-        checker = f"{script_dir}/check_sqlite_status.py"
+        checker = f"{script_dir}/check_sqlite_status.py",
+        annotation = f"{script_dir}/error_annotation.py"
     conda:
         "envs/mappy.yaml"
     log:
@@ -579,7 +599,7 @@ rule metadata_creation:
             mkdir -p {output.directory}
             touch {output.final}
             echo "Upstream fails" > {log}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}  
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} "" 
             find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
             exit 0
         fi
@@ -589,9 +609,10 @@ rule metadata_creation:
         set -e
         if [[ $status -ne 0 ]]; then
             echo "ERROR: metadata_creation failed for {wildcards.filename}" > {output.final}
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log}
+            error=$(python {params.annotation} {log} {params.rule_name})
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} "$error"
         else
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log}
+            python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} OK {log} ""
         fi
         sleep 2
         find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
