@@ -85,6 +85,8 @@ rule manifest:
         status=$?
         set -e
         if [[ $status -ne 0 ]]; then
+            # If the script fails, create the output directory and touch manifest file
+            mkdir -p {output.output_dir}
             touch {output.manifest}
             error=$(python {params.annotation} {log} {params.rule_name})
             python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} "$error"
@@ -240,6 +242,7 @@ rule deblur:
         r"""
         sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.upstream_rule}")
         if [ "$sqlite_status" = "FAILED" ]; then
+            mkdir -p {output.path}
             touch {output.representative} {output.table} {output.stats}
             echo "Upstream fails" > {log}
             python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} ""
@@ -252,6 +255,7 @@ rule deblur:
         status=$?
         set -e
         if [[ $status -ne 0 ]]; then
+            mkdir -p {output.path}
             touch {output.representative} {output.table} {output.stats}
             error=$(python {params.annotation} {log} {params.rule_name})
             python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} "$error"
@@ -296,6 +300,7 @@ rule export_seqs:
         r"""
         sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.upstream_rule}")
         if [ "$sqlite_status" = "FAILED" ]; then
+            mkdir -p {output.output}
             touch {output.final}
             echo "Upstream fails" > {log}
             python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} ""
@@ -308,6 +313,7 @@ rule export_seqs:
         status=$?
         set -e
         if [[ $status -ne 0 ]]; then
+            mkdir -p {output.output}
             touch {output.final}
             error=$(python {params.annotation} {log} {params.rule_name})
             python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} "$error"
@@ -415,6 +421,7 @@ rule export_and_edit_table:
         r"""
         sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.upstream_rule}")
         if [ "$sqlite_status" = "FAILED" ]; then
+            mkdir -p {output.folder}
             touch {output.biom} {output.table} {output.edited}
             echo "Upstream fails" > {log}
             python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} ""
@@ -529,6 +536,7 @@ rule qiime_stats:
         r"""
         sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.upstream_rule}")
         if [ "$sqlite_status" = "FAILED" ]; then
+            mkdir -p {output.qc_dir} {output.deblur_dir}
             touch {output.final_qc} {output.final_deblur}
             echo "Upstream fails" > {log}
             python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} ""
@@ -608,6 +616,7 @@ rule metadata_creation:
         status=$?
         set -e
         if [[ $status -ne 0 ]]; then
+            mkdir -p {output.directory}
             echo "ERROR: metadata_creation failed for {wildcards.filename}" > {output.final}
             error=$(python {params.annotation} {log} {params.rule_name})
             python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} "$error"
