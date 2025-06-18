@@ -434,6 +434,7 @@ rule export_and_edit_table:
         status=$?
         set -e
         if [[ $status -ne 0 ]]; then
+            mkdir -p {output.folder}
             touch {output.biom} {output.table} {output.edited}
             error=$(python {params.annotation} {log} {params.rule_name})
             python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} "$error"
@@ -545,6 +546,7 @@ rule qiime_stats:
         fi
         # For qiime_stats, check both inputs are present and non-empty
         if [ ! -s {input.qc} ] || [ ! -s {input.deblur} ]; then
+            mkdir -p {output.qc_dir} {output.deblur_dir}
             touch {output.final_qc} {output.final_deblur}
             echo "Upstream fails" > {log}
             python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} ""
@@ -557,6 +559,7 @@ rule qiime_stats:
         status=$?
         set -e
         if [[ $status -ne 0 ]]; then
+            mkdir -p {output.qc_dir} {output.deblur_dir}
             touch {output.final_qc} {output.final_deblur}
             error=$(python {params.annotation} {log} {params.rule_name})
             python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} "$error"
