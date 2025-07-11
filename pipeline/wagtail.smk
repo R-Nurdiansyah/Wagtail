@@ -43,7 +43,7 @@ rule all:
     localrule: True
 
 rule manifest:
-    group: "initialize"
+    group: "wagtail"
     #read the data in filenames and check with file map
 #create manifest file for each accession, single end data only
     input:
@@ -98,7 +98,7 @@ rule manifest:
         """
 
 rule qiime2_import:
-    group: "initialize"
+    group: "wagtail"
     input:
         manifest = f"{run_dir}/{run_name}/0_manifest/{{filename}}/{{filename}}_manifest.csv"
     output:
@@ -152,7 +152,7 @@ rule qiime2_import:
         """
 
 rule quality_control:
-    group: "initialize"
+    group: "wagtail"
     #run the quality control using qiime2 quality-filter q-score
     input: 
         qza = f"{run_dir}/{run_name}/1_import_wagtail/{{filename}}-single.qza"
@@ -207,7 +207,7 @@ rule quality_control:
         """
 
 rule deblur:
-    group: "initialize"
+    group: "wagtail"
 #script version
     input: 
         filtered = f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}-filtered.qza"
@@ -267,7 +267,7 @@ rule deblur:
         """
 
 rule export_seqs:
-    group: "per_sample"
+    group: "wagtail"
 #export the biom table from the abundance table using the custom script
     input: 
         representative = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-rep-seqs.qza"
@@ -325,7 +325,7 @@ rule export_seqs:
         """
 
 rule mappy:
-    group: "per_sample"
+    group: "wagtail"
     input:
         #as the product is one file, we can use single input
         F = f"{run_dir}/{run_name}/4_rep_seqs_wagtail/{{filename}}/dna-sequences.fasta",
@@ -383,7 +383,7 @@ rule mappy:
         """
 
 rule export_and_edit_table:
-    group: "per_sample"
+    group: "wagtail"
 #export the biom table from the abundance table using the custom script
     input: 
         table = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-table.qza"
@@ -446,7 +446,7 @@ rule export_and_edit_table:
         """
 
 rule extract_taxonomy:
-    group: "per_sample"
+    group: "wagtail"
 #extract taxonomy data based on the database and format the output for filling the taxonomy
     input:
         primary = f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_alignment.tsv",
@@ -501,7 +501,7 @@ rule extract_taxonomy:
         """
 
 rule qiime_stats:
-    group: "per_sample"
+    group: "wagtail"
 #wrote the metadata for the run
     input: 
         qc = f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}-qc-stats.qza",
@@ -571,7 +571,7 @@ rule qiime_stats:
         """
 
 rule metadata_creation:
-    group: "per_sample"
+    group: "wagtail"
 #wrote the metadata for the run
     input: 
         final_qc = f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}/stats.csv",
