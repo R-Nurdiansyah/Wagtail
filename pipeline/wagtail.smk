@@ -630,57 +630,42 @@ rule metadata_creation:
         find $(dirname {log}) -type f ! -name "$(basename {log})" ! -name "*.log" ! -name "*.sql" -delete
         """
 
-rule merge_logs:
-    localrule: True
+rule cleanup:
+    group: "cleanup"
     input:
         metadata = expand(f"{run_dir}/{run_name}/7_metadata/{{filename}}/{{filename}}_metadata.tsv", filename = filenames),
         community = expand(f"{run_dir}/{run_name}/6_condensed_wagtail/{{filename}}_condensed.tsv", filename = filenames),
     output:
-        merged = sqlite_db_path
+        merged = sqlite_db_path,
+        cleanup_done = f"{run_dir}/{run_name}/0_logs_wagtail/cleanup_done.txt",
+        full_metadata = f"{run_dir}/{run_name}/7_metadata/{run_name}_full_metadata.tsv"
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     params:
-        script = f"{script_dir}/sql_merge.py",
-        dbs = expand(f"{run_dir}/{run_name}/0_tmp/{{filename}}_log.sql", filename=filenames)
+        merge_script = f"{script_dir}/sql_merge.py",
+        dbs = expand(f"{run_dir}/{run_name}/0_tmp/{{filename}}_log.sql", filename=filenames),
+        target = f"{run_dir}/{run_name}/",
+        tmpdir = f"{run_dir}/{run_name}/0_tmp/"
     conda:
         "envs/mappy.yaml"
     log:
-        f"{run_dir}/{run_name}/0_logs_wagtail/merger.log"
-    threads:
-        1
-    shell:
-        r"""
-        touch {input.metadata[0]}  # Ensure the first metadata file exists
-        touch {input.community[0]}  # Ensure the first community file exists
-        python {params.script} {output.merged} {params.dbs} &> {log}
-        sleep 2
-        """
-
-rule clean_intermidiates:
-    localrule: True
-    #rule to clean every in-between result after metadata for each filename is created. cleaning target is 1_* until 5_*
-    input:
-        metadata = expand(f"{run_dir}/{run_name}/7_metadata/{{filename}}/{{filename}}_metadata.tsv", filename = filenames),
-        community = expand(f"{run_dir}/{run_name}/6_condensed_wagtail/{{filename}}_condensed.tsv", filename = filenames),
-        merged = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{timestamp}_log.sql"
-    output:
-        touch(f"{run_dir}/{run_name}/0_logs_wagtail/cleanup_done.txt")
-    wildcard_constraints:
-        filename = r"[^\.]+"
-    conda:
-        "envs/mappy.yaml"
-    log:
-        f"{run_dir}/{run_name}/0_logs_wagtail/cleaning.log"
+        merger = f"{run_dir}/{run_name}/0_logs_wagtail/merger.log",
+        cleaning = f"{run_dir}/{run_name}/0_logs_wagtail/cleaning.log",
+        full_metadata = f"{run_dir}/{run_name}/0_logs_wagtail/full_metadata.log"
     threads:
         1
     resources:
-        mem_mb = 160,
-        runtime = "1h"
-    params:
-        target = f"{run_dir}/{run_name}/",
-        tmpdir = f"{run_dir}/{run_name}/0_tmp/"
+        mem_mb = 2000,
+        runtime = "2h"
     shell:
         r"""
+        # Step 1: Merge logs
+        touch {input.metadata[0]}  # Ensure the first metadata file exists
+        touch {input.community[0]}  # Ensure the first community file exists
+        python {params.merge_script} {output.merged} {params.dbs} &> {log.merger}
+        sleep 2
+        
+        # Step 2: Clean intermediates
         # Remove blank or FAILED condensed files
         for f in {run_dir}/{run_name}/6_condensed_wagtail/*_condensed.tsv; do
             # Remove if file is empty
@@ -696,26 +681,9 @@ rule clean_intermidiates:
         # Clean up temporary directory and intermediate files
         rm -rf {params.tmpdir}
         rm -rf {params.target}/[1-5]_*
-        """ 
-
-rule metadata_combine:
-    localrule: True
-#combine all metadata files into one
-    input:
-        metadata = expand(f"{run_dir}/{run_name}/7_metadata/{{filename}}/{{filename}}_metadata.tsv", filename = filenames),
-        cleanup = f"{run_dir}/{run_name}/0_logs_wagtail/cleanup_done.txt"
-    output:
-        f"{run_dir}/{run_name}/7_metadata/{run_name}_full_metadata.tsv"
-    wildcard_constraints:
-        filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
-    conda:
-        "envs/mappy.yaml"
-    log:
-        f"{run_dir}/{run_name}/0_logs_wagtail/full_metadata.log"
-    threads:
-        1
-    resources:
-        mem_mb = 160,
-        runtime = "1h"
-    shell:
-        "(head -n 1 {input.metadata[0]} > {output} && tail -n +2 -q {input.metadata} >> {output}) &> {log}"
+        touch {output.cleanup_done}
+        echo "Cleanup completed" &> {log.cleaning}
+        
+        # Step 3: Combine metadata files
+        (head -n 1 {input.metadata[0]} > {output.full_metadata} && tail -n +2 -q {input.metadata} >> {output.full_metadata}) &> {log.full_metadata}
+        """
