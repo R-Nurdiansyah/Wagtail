@@ -77,8 +77,9 @@ snakemake --use-conda -c 8 -s pipeline/wagtail.smk --configfile pipeline/config.
 STEP 4: CHECK RESULTS
 ---------------------
 Results will be in: run/my_analysis/
-- 6_condensed_wagtail/    # Taxonomy profiles per sample
-- 7_metadata/             # Metadata and combined results
+- 0_logs_wagtail/[run_name]_[date]_log.sql  # full log of each run
+- 6_condensed_wagtail/                      # Taxonomy profiles per sample
+- 7_metadata/                               # Metadata and combined results
 
 ===============================================================================
                         METHOD 2: BATCH PROCESSING
