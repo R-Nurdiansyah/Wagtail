@@ -680,7 +680,7 @@ rule cleanup:
         done
         # Clean up temporary directory and intermediate files
         rm -rf {params.tmpdir}
-        rm -rf {params.target}/[1-5]_*
+        rm -rf {params.target}/[1-3]_* {params.target}/5_*
         touch {output.cleanup_done}
         echo "Cleanup completed" &> {log.cleaning}
         
