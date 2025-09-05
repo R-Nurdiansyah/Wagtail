@@ -666,18 +666,18 @@ rule cleanup:
         sleep 2
         
         # Step 2: Clean intermediates
-        # Remove blank or FAILED condensed files
-        for f in {run_dir}/{run_name}/6_condensed_wagtail/*_condensed.tsv; do
-            # Remove if file is empty
-            if [ ! -s "$f" ]; then
-                rm -f "$f"
-                continue
-            fi
-            # Remove if file contains only the word FAILED (from soft fail)
-            if grep -q "^FAILED" "$f"; then
-                rm -f "$f"
-            fi
-        done
+        # Remove blank or FAILED condensed files -> no need to be done
+        # for f in {run_dir}/{run_name}/6_condensed_wagtail/*_condensed.tsv; do
+        #     # Remove if file is empty
+        #     if [ ! -s "$f" ]; then
+        #         rm -f "$f"
+        #         continue
+        #     fi
+        #     # Remove if file contains only the word FAILED (from soft fail)
+        #     if grep -q "^FAILED" "$f"; then
+        #         rm -f "$f"
+        #     fi
+        # done
         # Clean up temporary directory and intermediate files
         rm -rf {params.tmpdir}
         rm -rf {params.target}/[1-3]_* {params.target}/5_*
