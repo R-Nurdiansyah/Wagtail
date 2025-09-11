@@ -25,6 +25,7 @@ def create_manifest(input, file_map, output):
         logging.info("Created manifest file for sample:", input)
     else:
         logging.warning(f"Accession {input} not found in the file map")
+        sys.exit(1)
 
 if __name__ == "__main__":
     # Setup parser

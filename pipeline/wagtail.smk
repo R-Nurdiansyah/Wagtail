@@ -212,13 +212,13 @@ rule deblur:
     input: 
         filtered = f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}-filtered.qza"
     output:
-        path = directory(f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}"),
         representative = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-rep-seqs.qza",
         table = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-table.qza",
         stats = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-deblur-stats.qza"
     wildcard_constraints:
         filename = r"[^\.]+"  # Regex to ensure no '.' in 'filename' wildcard
     params:
+        path = directory(f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}"),
         script = f"{script_dir}/deblur_all.py",
         sqlite_db = f"{run_dir}/{run_name}/0_tmp/{{filename}}_log.sql",
         rule_name = "deblur",
@@ -242,7 +242,7 @@ rule deblur:
         r"""
         sqlite_status=$(python {params.checker} {params.sqlite_db} "{wildcards.filename}" "{params.upstream_rule}")
         if [ "$sqlite_status" = "FAILED" ]; then
-            mkdir -p {output.path}
+            mkdir -p {params.path}
             touch {output.representative} {output.table} {output.stats}
             echo "Upstream fails" > {log}
             python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} ""
@@ -251,11 +251,11 @@ rule deblur:
         fi
         export TMPDIR={params.tmpdir}
         set +e
-        python {params.script} -i {input.filtered} -o {output.path} -t {threads} -r {output.representative} -a {output.table} -s {output.stats} &> {log}
+        python {params.script} -i {input.filtered} -o {params.path} -t {threads} -r {output.representative} -a {output.table} -s {output.stats} &> {log}
         status=$?
         set -e
         if [[ $status -ne 0 ]]; then
-            mkdir -p {output.path}
+            mkdir -p {params.path}
             touch {output.representative} {output.table} {output.stats}
             error=$(python {params.annotation} {log} {params.rule_name})
             python {params.logger} {params.sqlite_db} "{wildcards.filename}" {params.rule_name} FAILED {log} "$error"
