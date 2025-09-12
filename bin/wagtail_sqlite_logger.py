@@ -50,13 +50,16 @@ execute_with_retry(
         rule TEXT,
         outcome TEXT,
         log TEXT,
-        note TEXT
+        note TEXT,
+        UNIQUE(id, rule)
+        # Composite primary key to avoid duplicates
     )
     """
 )
+#make sure to use INSERT OR REPLACE to update existing entries instead of creating duplicates
 execute_with_retry(
     c,
-    "INSERT INTO logs (id, rule, outcome, log, note) VALUES (?, ?, ?, ?, ?)",
+    "INSERT OR REPLACE INTO logs (id, rule, outcome, log, note) VALUES (?, ?, ?, ?, ?)",
     (id_, rule, outcome, log, note)
 )
 conn.commit()

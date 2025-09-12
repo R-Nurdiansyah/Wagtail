@@ -2,6 +2,7 @@ import os
 import argparse
 import logging
 import polars as pl
+import sys
 
 def create_manifest(input, file_map, output):
     #1. read the file map. file map has 2 columns: accession and path. create a dictionary from those 2 columns
