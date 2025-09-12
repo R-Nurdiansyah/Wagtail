@@ -42,6 +42,7 @@ if os.path.exists(log_path):
 
 conn = connect_with_retry(db_path)
 c = conn.cursor()
+# Composite primary key to avoid duplicates
 execute_with_retry(
     c,
     """
@@ -52,7 +53,6 @@ execute_with_retry(
         log TEXT,
         note TEXT,
         UNIQUE(id, rule)
-        # Composite primary key to avoid duplicates
     )
     """
 )
