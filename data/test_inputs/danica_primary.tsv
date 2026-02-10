@@ -1,0 +1,6 @@
+read	contig
+fcb15987386cce65c60466dbc4d440b8	FLASV381465.1373;tax=d:Bacteria,p:Desulfobacterota,c:Desulfovibrionia,o:Desulfovibrionales,f:Desulfovibrionaceae,g:MFD_g_381465,s:MFD_s_381465;
+e43934c48c7ca464f3c9557d9af303d6	FLASV126797.1364;tax=d:Bacteria,p:Firmicutes,c:Clostridia,o:Christensenellales,f:Christensenellaceae,g:MFD_g_126797,s:MFD_s_126797;
+f4db2dc27d7a3ea276dae78538ee47de	FLASV565496.1353;tax=d:Bacteria,p:Firmicutes,c:Clostridia,o:Lachnospirales,f:Lachnospiraceae,g:MFD_g_73375,s:MFD_s_522197;
+40d01a2ebb01d9d9416790f42dd7fc48	FLASV424860.1330;tax=d:Bacteria,p:Firmicutes,c:Clostridia,o:Clostridiales,f:Clostridiaceae,g:Clostridium_sensu_stricto_12,s:Clostridium_aciditolerans;
+ba91000f5c56e9756551aca01742b467	FLASV842840.1343;tax=d:Bacteria,p:Firmicutes,c:Desulfitobacteriia,o:Desulfitobacteriales,f:Heliobacteriaceae,g:Heliobacterium,s:Heliobacterium_modesticaldum;

@@ -1,0 +1,2 @@
+Run aborted
+All sequences from all samples were filtered out.

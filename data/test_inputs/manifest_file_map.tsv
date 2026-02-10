@@ -1,0 +1,2 @@
+ACC_TEST	data/test_inputs/sample_forward.fastq
+ACC_MISSING	data/test_inputs/missing.fastq

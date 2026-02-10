@@ -11,7 +11,7 @@ import tempfile
 sys.path = [os.path.join(os.path.dirname(os.path.realpath(__file__)),'..')] + sys.path
 
 #setting the directory path for database and test data
-data_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)),'test_data')
+data_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'test_data')
 
 from bin.extract_taxonomy_danica import extract_taxonomy
 
@@ -29,8 +29,8 @@ class TestExtractTaxon(unittest.TestCase):
 
     def test_mappy_alignment_successful(self):
         # Test if alignment is successful and alignment file and metadata files are created
-        input_align = os.path.join(data_dir, 'test_alignment.tsv')
-        input_table = os.path.join(data_dir, 'test_table.tsv')
+        input_align = os.path.join(data_dir, 'danica_primary.tsv')
+        input_table = os.path.join(data_dir, 'danica_table.tsv')
         sample_accession = 'test_sample'
         extract_taxonomy(input_align, input_table, sample_accession, self.condensed_output)
         

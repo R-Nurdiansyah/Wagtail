@@ -11,7 +11,7 @@ import tempfile
 sys.path = [os.path.join(os.path.dirname(os.path.realpath(__file__)),'..')] + sys.path
 
 #setting the directory path for database and test data
-data_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)),'test_data')
+data_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'test_data')
 
 from bin.wagtail_metadata_meta_combine import combine_metadata
 
@@ -27,9 +27,9 @@ class TestCombineMetadata(unittest.TestCase):
 
     def test_mappy_alignment_successful(self):
         # Test if alignment is successful and alignment file and metadata files are created
-        input_qc = os.path.join(data_dir, 'test_qc.csv')
-        input_deblur = os.path.join(data_dir, 'test_deblur.csv')
-        input_mappy = os.path.join(data_dir, 'test_metadata.tsv')
+        input_qc = os.path.join(data_dir, 'qc_stats.csv')
+        input_deblur = os.path.join(data_dir, 'deblur_stats.csv')
+        input_mappy = os.path.join(data_dir, 'mappy_metadata.tsv')
         run_name = 'test_sample'
         combine_metadata(input_qc, input_deblur, input_mappy, self.output_dir, run_name)
         
