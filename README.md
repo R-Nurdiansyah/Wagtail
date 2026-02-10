@@ -92,16 +92,27 @@ Using the wrapper script (recommended)
 python wagtail.py --use-conda -c 8 --configfile pipeline/config.yaml
 ```
 
+if using GreenGenes2 database
+```bash
+python wagtail.py --gg2 --use-conda -c 8 --configfile pipeline/config.yaml
+```
+
 Or directly with snakemake
 ```bash
-snakemake --use-conda -c 8 -s pipeline/wagtail.smk --configfile pipeline/config.yaml
+snakemake --use-conda -c 8 -s pipeline/wagtail.smk --configfile pipeline/config.yaml #MFD database
+snakemake --use-conda -c 8 -s pipeline/wagtail_gg2.smk --configfile pipeline/config.yaml #GG2 database
 ```
 
 STEP 4: CHECK RESULTS\
-Results will be in: run/my_analysis/
+Results will be in: run/my_analysis_name/
 - 0_logs_wagtail/[run_name]_[date]_log.sql  # full log of each run
 - 6_condensed_wagtail/                      # Taxonomy profiles per sample
 - 7_metadata/                               # Metadata and combined results
+
+and some directories for intermediate results
+- 0_manifest                                # QIIME 2 manifest file per sample
+- 4_rep_seqs_wagtail/                       # ASV results from Deblur per sample
+- 4_table_wagtail/                          # Taxonomy table from Deblur per sample
 
 If it is the first time you execute Wagtail, Snakemake will create the conda environment automatically and it will take a few minutes depending on your internet access speed and system.\
 All of the result will be saved in the run directory.
@@ -296,4 +307,4 @@ Database
 
 ## Code development notice
 This tool is created as a part of PhD project for analyzing the global amplicon datasets and integrate them in a machine learning model to understand the connection of global microbiome communities with its environment and vice-versa.\
-**This tool is only tested for 16S amplicon sequences with bacteria and archaea database (MFD)**
+**This tool is only tested for 16S amplicon sequences with bacteria and archaea database (Microflora Danica v.0.1 and GreenGenes2)**
