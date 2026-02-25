@@ -19,3 +19,5 @@ run/
 # pixi environments
 .pixi
 *.egg-info
+0_raw/
+sandbox.ipynb
