@@ -94,14 +94,40 @@ def calculate_avg_read_length(extracted):
     logging.info(f"Average read length: {avg_read_length:.2f} basepairs")
     return avg_read_length
 
-def deblur(input, avg_read_length, threads, representative, table, stats):
-# Create the output directory
-    #calculate trim length and make it integer
+def deblur(input, avg_read_length, threads, representative, table, stats, reference, marker):
+    """Run qiime deblur denoise-16S for 16S samples, denoise-other for all others."""
     trim_length = int(avg_read_length - 10)
-    # Qiime export command
-    qiime_command = f"qiime deblur denoise-16S --i-demultiplexed-seqs {input} --p-trim-length {trim_length} --p-sample-stats --p-min-reads 0 --p-jobs-to-start {threads} --o-representative-sequences {representative} --o-table {table} --o-stats {stats}"
+    logging.info(f"Marker: {marker}  |  trim_length: {trim_length}")
 
-    # Run the Qiime command
+    if marker == "16S":
+        # denoise-16S uses the built-in 16S reference; --i-reference-seqs is not accepted
+        qiime_command = (
+            f"qiime deblur denoise-16S"
+            f" --i-demultiplexed-seqs {input}"
+            f" --p-trim-length {trim_length}"
+            f" --p-sample-stats"
+            f" --p-min-reads 0"
+            f" --p-jobs-to-start {threads}"
+            f" --o-representative-sequences {representative}"
+            f" --o-table {table}"
+            f" --o-stats {stats}"
+        )
+    else:
+        # denoise-other requires an explicit reference database
+        qiime_command = (
+            f"qiime deblur denoise-other"
+            f" --i-demultiplexed-seqs {input}"
+            f" --i-reference-seqs {reference}"
+            f" --p-trim-length {trim_length}"
+            f" --p-sample-stats"
+            f" --p-min-reads 0"
+            f" --p-jobs-to-start {threads}"
+            f" --o-representative-sequences {representative}"
+            f" --o-table {table}"
+            f" --o-stats {stats}"
+        )
+
+    logging.info(f"Running: {qiime_command}")
     subprocess.run(qiime_command, shell=True, check=True)
 
 if __name__ == "__main__":
@@ -111,6 +137,8 @@ if __name__ == "__main__":
     parent_parser.add_argument('--quiet', help='only output errors', action="store_true")
 
     parent_parser.add_argument('--input', '-i', help='data input', required=True)
+    parent_parser.add_argument('--marker', help='marker gene type: 16S | 18S | ITS | CO1', required=True)
+    parent_parser.add_argument('--reference', help='reference sequences for deblur (required for non-16S markers)', required=True)
     parent_parser.add_argument('--output-path', '-o', help='directory of fastq.gz output', required=True)
     parent_parser.add_argument('--threads', '-t', help='threads number for multithreading', required=True)
     parent_parser.add_argument('--representative', '-r', help='output: representative seqs from deblur', required=True)
@@ -130,4 +158,4 @@ if __name__ == "__main__":
     # Run the Qiime export command
     extracted = run_qiime_export(args.input, args.output_path)
     avg_read_length = calculate_avg_read_length(extracted)
-    deblur(args.input, avg_read_length, args.threads, args.representative, args.table, args.stats)
+    deblur(args.input, avg_read_length, args.threads, args.representative, args.table, args.stats, args.reference, args.marker)

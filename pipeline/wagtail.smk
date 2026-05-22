@@ -1,775 +1,850 @@
-# =============================================================================
-# Wagtail Pipeline v0.15
-# 16S amplicon sequencing analysis pipeline (Illumina single-end only)
-# Reference database: Microflora Danica
-# =============================================================================
+# Wagtail pipeline v0.15
+# Changes from v0.14:
+#   - Bash boilerplate extracted into shared shell functions (wagtail_functions.sh)
+#   - Added marker_id rule (mappy-based 16S/18S/ITS/CO1 identification) as pre-flight QC
+#   - marker_id runs before manifest; non-16S samples soft-fail early
 
 import os
+import glob
+import csv
+from pathlib import Path
 from datetime import datetime
 
-# -----------------------------------------------------------------------------
-# Directory layout
-# -----------------------------------------------------------------------------
-parent_dir  = os.path.dirname(workflow.basedir)
-db_dir      = os.path.join(parent_dir, "database")
-data_dir    = os.path.join(parent_dir, "data")
-script_dir  = os.path.join(parent_dir, "bin")
-run_dir     = os.path.join(parent_dir, "run")
+# ── Directories ──────────────────────────────────────────────────────────────
+parent_dir = os.path.dirname(workflow.basedir)
+db_dir     = os.path.join(parent_dir, "database")
+data_dir   = os.path.join(parent_dir, "data")
+script_dir = os.path.join(parent_dir, "bin")
+run_dir    = os.path.join(parent_dir, "run")
 
-# -----------------------------------------------------------------------------
-# Config
-# -----------------------------------------------------------------------------
+# ── Config ────────────────────────────────────────────────────────────────────
 configfile: "config.yaml"
 
+filename_list = config["sample_list"]
+filenames     = [line.strip() for line in open(filename_list)]
 run_name      = config["run_name"]
-filenames     = [l.strip() for l in open(config["sample_list"])]
-timestamp     = datetime.now().strftime("%Y%m%d")
 
-# Derived paths used in multiple rules
-RUN           = f"{run_dir}/{run_name}"
-TMP_ROOT      = f"{RUN}/0_tmp"
-LOG_ROOT      = f"{RUN}/0_logs_wagtail"
-sqlite_db_path = f"{LOG_ROOT}/{run_name}_{timestamp}_log.sql"
+# ── Timestamp / SQLite ───────────────────────────────────────────────────
+def make_timestamp():
+    fmt = "%Y%m%d"
+    return datetime.now().strftime(fmt)
 
-# -----------------------------------------------------------------------------
-# Scripts & environments
-# -----------------------------------------------------------------------------
-LOGGER_SCRIPT     = f"{script_dir}/wagtail_sqlite_logger.py"
-CHECKER_SCRIPT    = f"{script_dir}/check_sqlite_status.py"
-ANNOTATION_SCRIPT = f"{script_dir}/error_annotation.py"
+timestamp = make_timestamp()
+sql_log   = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{timestamp}_log.sql"
 
-QIIME_ENV  = "envs/qiime2-amplicon-2023.9-py38-linux-conda.yml"
-MAPPY_ENV  = "envs/mappy.yaml"
+# ── Shared path helpers (called from params) ──────────────────────────────────
+def log_dir(filename):
+    return f"{run_dir}/{run_name}/0_logs_wagtail/{filename}"
 
-# -----------------------------------------------------------------------------
-# Wildcard constraint shared by all per-sample rules
-# -----------------------------------------------------------------------------
-WILDCARD_FILENAME = r"[^\.]+"
+def tmp_db(filename):
+    return f"{run_dir}/{run_name}/0_tmp/{filename}_log.sql"
 
-# -----------------------------------------------------------------------------
-# Soft-fail bash helpers (injected into every shell block)
-# -----------------------------------------------------------------------------
-# soft_fail_upstream: propagates a FAILED status from an upstream rule.
-#   Touches output file(s), writes a log entry, then exits 0 so Snakemake
-#   considers the rule "done" (soft fail rather than hard abort).
-#
-# run_and_log_soft_fail: runs a command, catches non-zero exit, annotates the
-#   error, writes a SQLite log entry, then exits 0.
-#   On success it also writes an OK log entry.
-#   Either way it removes all non-log artefacts from the log directory so
-#   intermediate clutter is minimised as the pipeline runs.
-SOFT_FAIL_HELPERS = r"""
-soft_fail_upstream() {
-    local sqlite_status="$1"
-    local touch_cmd="$2"
-    local sqlite_db="$3"
-    local sample="$4"
-    local rule_name="$5"
-    local log_file="$6"
-    local logger="$7"
+def tmp_dir(filename):
+    return f"{run_dir}/{run_name}/0_tmp/{filename}"
 
-    if [ "$sqlite_status" = "FAILED" ]; then
-        eval "$touch_cmd"
-        echo "Upstream failed" > "$log_file"
-        python "$logger" "$sqlite_db" "$sample" "$rule_name" FAILED "$log_file" ""
-        find "$(dirname "$log_file")" -type f \
-            ! -name "$(basename "$log_file")" \
-            ! -name "*.log" \
-            ! -name "*.sql" \
-            -delete
-        exit 0
-    fi
-}
+# Path to the shared bash helper library (generated alongside this .smk)
+BASH_LIB = os.path.join(workflow.basedir, "wagtail_functions.sh")
 
-run_and_log_soft_fail() {
-    local run_cmd="$1"
-    local fail_cmd="$2"
-    local sqlite_db="$3"
-    local sample="$4"
-    local rule_name="$5"
-    local log_file="$6"
-    local logger="$7"
-    local annotation="$8"
+# ── Marker-aware glob helpers ─────────────────────────────────────────────────
+def get_marker(wc):
+    """Read predicted marker from .marker TSV output.
+    Calls checkpoints.marker_id.get() so Snakemake defers DAG construction
+    until the checkpoint has run and the file actually exists.
+    Returns "16S" as a safe fallback when the file is empty or unreadable
+    (e.g. OOM kill) — downstream rules will still soft-fail via SQLite check.
+    """
+    checkpoints.marker_id.get(filename=wc.filename)
+    marker_file = f"{run_dir}/{run_name}/0_marker_id/{wc.filename}.marker"
+    try:
+        with open(marker_file) as fh:
+            reader = csv.DictReader(fh, delimiter="\t")
+            row = next(reader)
+        return row["predicted_marker"]
+    except (StopIteration, KeyError, OSError):
+        return "16S"
 
-    set +e
-    eval "$run_cmd" &> "$log_file"
-    local exit_status=$?
-    set -e
+def _resolve(marker: str, db_dir: str, pattern: str) -> str:
+    """Resolve a single file matching db_dir/pattern. Raises if 0 or >1 match."""
+    matches = glob.glob(f"{db_dir}/{pattern}")
+    if not matches:
+        raise FileNotFoundError(f"No file matching '{pattern}' found in {db_dir}")
+    if len(matches) > 1:
+        raise ValueError(f"Multiple files matching '{pattern}' in {db_dir}: {matches}")
+    return matches[0]
 
-    if [ $exit_status -ne 0 ]; then
-        eval "$fail_cmd"
-        local error_msg
-        error_msg=$(python "$annotation" "$log_file" "$rule_name")
-        python "$logger" "$sqlite_db" "$sample" "$rule_name" FAILED "$log_file" "$error_msg"
-    else
-        python "$logger" "$sqlite_db" "$sample" "$rule_name" OK "$log_file" ""
-    fi
+def get_deblur_db(wc) -> str:
+    marker = get_marker(wc)
+    if marker == "16S":
+        # denoise-16S uses QIIME2's built-in reference — no external database file exists.
+        # Return the marker file itself as a harmless dummy so Snakemake can build the DAG;
+        # deblur_all.py ignores --reference when marker == 16S.
+        return f"{run_dir}/{run_name}/0_marker_id/{wc.filename}.marker"
+    return _resolve(marker, db_dir, pattern=f"{marker}_deblur*")
 
-    sleep 2
-    find "$(dirname "$log_file")" -type f \
-        ! -name "$(basename "$log_file")" \
-        ! -name "*.log" \
-        ! -name "*.sql" \
-        -delete
-}
-"""
+def get_mappy_ref(wc) -> str:
+    marker = get_marker(wc)
+    return _resolve(marker, db_dir, pattern=f"{marker}_database*")
 
-# =============================================================================
-# Rules
-# =============================================================================
+def get_tax_ref(wc) -> str:
+    marker = get_marker(wc)
+    return _resolve(marker, db_dir, pattern=f"{marker}_taxonomy*")
 
+DB_16S = _resolve("16S", db_dir, pattern="16S_database*")
+DB_18S = _resolve("18S", db_dir, pattern="18S_database*")
+DB_ITS = _resolve("ITS", db_dir, pattern="ITS_database*")
+DB_CO1 = _resolve("CO1", db_dir, pattern="CO1_database*")
+
+# ── rule all ─────────────────────────────────────────────────────────────────
 rule all:
-    """Final targets that drive the entire DAG."""
-    localrule: True
     input:
-        expand(f"{RUN}/6_condensed_wagtail/{{filename}}_condensed.tsv", filename=filenames),
-        f"{RUN}/7_metadata/{run_name}_full_metadata.tsv",
-        sqlite_db_path
+        expand(f"{run_dir}/{run_name}/6_condensed_wagtail/{{filename}}_condensed.tsv", filename=filenames),
+        f"{run_dir}/{run_name}/7_metadata/{run_name}_full_metadata.tsv",
+        sql_log
+    localrule: True
 
-
-# -----------------------------------------------------------------------------
-# Step 0 – Manifest creation
-# -----------------------------------------------------------------------------
-rule manifest:
-    """Create a QIIME 2 single-end manifest CSV for each sample."""
+# ── marker_id ─────────────────────────────────────────────────────────────────
+# Pre-flight QC: subsample reads and align against 16S, 18S, ITS, CO1 databases.
+# Writes the predicted marker to a .marker file. soft-fails if ambiguous.
+checkpoint marker_id:
     group: "wagtail"
     input:
-        filemap = config["file_map"]
+        filemap = config["file_map"],
     output:
-        output_dir = directory(f"{RUN}/0_manifest/{{filename}}"),
-        manifest   = f"{RUN}/0_manifest/{{filename}}/{{filename}}_manifest.csv"
+        marker = f"{run_dir}/{run_name}/0_marker_id/{{filename}}.marker"
     wildcard_constraints:
-        filename = WILDCARD_FILENAME
+        filename = r"[^\.]+"
+    params:
+        script          = f"{script_dir}/identify_amplicon.py",
+        sample          = "{filename}",
+        db_16S = DB_16S,
+        db_18S = DB_18S,
+        db_ITS = DB_ITS,
+        db_CO1 = DB_CO1,
+        sqlite_db       = lambda wc: tmp_db(wc.filename),
+        rule_name       = "marker_id",
+        tmpdir          = lambda wc: tmp_dir(wc.filename),
+        logger          = f"{script_dir}/wagtail_sqlite_logger.py",
+        annotation      = f"{script_dir}/error_annotation.py",
+        n_subsample     = 1000,
+        min_confidence  = 0.6,
+        bash_lib        = BASH_LIB
     conda:
-        MAPPY_ENV
+        "envs/mappy.yaml"
     log:
-        f"{LOG_ROOT}/{{filename}}/manifest_creation.log"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/marker_id.log"
     benchmark:
-        f"{LOG_ROOT}/{{filename}}/manifest_creation.benchmark.log"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/marker_id.benchmark.log"
+    threads: 1
+    resources:
+        mem_mb  = 24000,
+        runtime = "1h"
+    shell:
+        r"""
+        source {params.bash_lib}
+        LOGGER={params.logger}
+        mkdir -p $(dirname {output.marker}) {params.tmpdir}
+
+        set +e
+        python {params.script} \
+            --file-map  {input.filemap} \
+            --sample    {params.sample} \
+            --db-16S    {params.db_16S} \
+            --db-ITS    {params.db_ITS} \
+            --db-CO1    {params.db_CO1} \
+            --db-18S    {params.db_18S} \
+            --n-subsample   {params.n_subsample} \
+            --min-confidence {params.min_confidence} \
+            --output    {output.marker} \
+            &> {log}
+        status=$?
+        set -e
+
+        if [[ $status -ne 0 ]]; then
+            touch {output.marker}
+            wagtail_log_fail {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation}
+        else
+            marker_status=$(tail -n 1 {output.marker} | cut -f1)
+            predicted=$(tail -n 1 {output.marker} | cut -f2)
+            second=$(tail -n 1 {output.marker} | cut -f5)
+            best_id=$(tail -n 1 {output.marker} | cut -f3)
+            second_id=$(tail -n 1 {output.marker} | cut -f6)
+            margin=$(tail -n 1 {output.marker} | cut -f8)
+
+            if [[ "$marker_status" == "AMBIGUOUS" ]]; then
+                echo "ERROR: {wildcards.filename} marker ambiguous between best ($predicted mean_id=$best_id) and second-best ($second mean_id=$second_id); margin=$margin" >> {log}
+                wagtail_log_fail {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation}
+            elif [[ "$marker_status" == "UNKNOWN" ]]; then
+                echo "ERROR: {wildcards.filename} amplicon is not 16S, 18S, ITS, or CO1 (best hit fraction below confidence threshold)" >> {log}
+                wagtail_log_fail {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation}
+            else
+                wagtail_log_ok {params.sqlite_db} {wildcards.filename} {params.rule_name} {log}
+            fi
+        fi
+        wagtail_cleanup {log}
+        exit 0
+        """
+
+# ── manifest ──────────────────────────────────────────────────────────────────
+rule manifest:
+    group: "wagtail"
+    input:
+        filemap = config["file_map"],
+        marker  = f"{run_dir}/{run_name}/0_marker_id/{{filename}}.marker"
+    output:
+        output_dir = directory(f"{run_dir}/{run_name}/0_manifest/{{filename}}"),
+        manifest   = f"{run_dir}/{run_name}/0_manifest/{{filename}}/{{filename}}_manifest.csv"
+    wildcard_constraints:
+        filename = r"[^\.]+"
+    params:
+        script    = f"{script_dir}/create_manifest_wagtail.py",
+        sample    = "{filename}",
+        sqlite_db = lambda wc: tmp_db(wc.filename),
+        rule_name = "manifest",
+        upstream  = "marker_id",
+        tmpdir    = lambda wc: tmp_dir(wc.filename),
+        logger    = f"{script_dir}/wagtail_sqlite_logger.py",
+        checker   = f"{script_dir}/check_sqlite_status.py",
+        annotation= f"{script_dir}/error_annotation.py",
+        bash_lib  = BASH_LIB
+    conda:
+        "envs/mappy.yaml"
+    log:
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/manifest_creation.log"
+    benchmark:
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/manifest_creation.benchmark.log"
     threads: 1
     resources:
         mem_mb  = 320,
         runtime = "1h"
-    params:
-        script     = f"{script_dir}/create_manifest_wagtail.py",
-        sample     = "{filename}",
-        tmpdir     = f"{TMP_ROOT}/",
-        sqlite_db  = f"{TMP_ROOT}/{{filename}}_log.sql",
-        rule_name  = "manifest",
-        logger     = LOGGER_SCRIPT,
-        checker    = CHECKER_SCRIPT,
-        annotation = ANNOTATION_SCRIPT
     shell:
         r"""
-        {SOFT_FAIL_HELPERS}
+        source {params.bash_lib}
+        LOGGER={params.logger}
+        CHECKER={params.checker}
         mkdir -p {params.tmpdir}
-        run_and_log_soft_fail \
-            "python {params.script} \
-                --input    {params.sample} \
-                --file-map {input.filemap} \
-                --output   {output.output_dir}" \
-            "mkdir -p {output.output_dir} && touch {output.manifest}" \
-            "{params.sqlite_db}" "{wildcards.filename}" "{params.rule_name}" \
-            "{log}" "{params.logger}" "{params.annotation}"
+        wagtail_check_upstream {params.sqlite_db} {wildcards.filename} {params.upstream} \
+            "{output.manifest}" \
+            && {{ mkdir -p {output.output_dir}; touch {output.manifest}; }} \
+            && wagtail_log_fail {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation} \
+            && wagtail_cleanup {log} && exit 0
+
+        set +e
+        python {params.script} \
+            --input    {params.sample} \
+            --file-map {input.filemap} \
+            --output   {output.output_dir} \
+            &> {log}
+        status=$?
+        set -e
+
+        if [[ $status -ne 0 ]]; then
+            mkdir -p {output.output_dir}; touch {output.manifest}
+            wagtail_log_fail {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation}
+        else
+            wagtail_log_ok {params.sqlite_db} {wildcards.filename} {params.rule_name} {log}
+        fi
+        wagtail_cleanup {log}
+        exit 0
         """
 
-
-# -----------------------------------------------------------------------------
-# Step 1 – QIIME 2 import
-# -----------------------------------------------------------------------------
+# ── qiime2_import ─────────────────────────────────────────────────────────────
 rule qiime2_import:
-    """Import demultiplexed FASTQ into a QIIME 2 artifact."""
     group: "wagtail"
     input:
-        manifest = f"{RUN}/0_manifest/{{filename}}/{{filename}}_manifest.csv"
+        manifest = f"{run_dir}/{run_name}/0_manifest/{{filename}}/{{filename}}_manifest.csv"
     output:
-        qza = f"{RUN}/1_import_wagtail/{{filename}}-single.qza"
+        qza = f"{run_dir}/{run_name}/1_import_wagtail/{{filename}}-single.qza"
     wildcard_constraints:
-        filename = WILDCARD_FILENAME
+        filename = r"[^\.]+"
+    params:
+        sqlite_db = lambda wc: tmp_db(wc.filename),
+        rule_name = "qiime2_import",
+        upstream  = "manifest",
+        tmpdir    = lambda wc: tmp_dir(wc.filename),
+        logger    = f"{script_dir}/wagtail_sqlite_logger.py",
+        checker   = f"{script_dir}/check_sqlite_status.py",
+        annotation= f"{script_dir}/error_annotation.py",
+        bash_lib  = BASH_LIB
     conda:
-        QIIME_ENV
+        "envs/qiime2.yml"
     log:
-        f"{LOG_ROOT}/{{filename}}/qiime2_import.log"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/qiime2_import.log"
     benchmark:
-        f"{LOG_ROOT}/{{filename}}/qiime2_import.benchmark.log"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/qiime2_import.benchmark.log"
     threads: 1
     resources:
         mem_mb  = 640,
         runtime = "1h"
-    params:
-        sqlite_db     = f"{TMP_ROOT}/{{filename}}_log.sql",
-        rule_name     = "qiime2_import",
-        upstream_rule = "manifest",
-        tmpdir        = f"{TMP_ROOT}/{{filename}}",
-        logger        = LOGGER_SCRIPT,
-        checker       = CHECKER_SCRIPT,
-        annotation    = ANNOTATION_SCRIPT
     shell:
         r"""
-        {SOFT_FAIL_HELPERS}
-        sqlite_status=$(python {params.checker} {params.sqlite_db} \
-            "{wildcards.filename}" "{params.upstream_rule}")
-        soft_fail_upstream "$sqlite_status" \
-            "touch {output.qza}" \
-            "{params.sqlite_db}" "{wildcards.filename}" "{params.rule_name}" \
-            "{log}" "{params.logger}"
+        source {params.bash_lib}
+        LOGGER={params.logger}
+        CHECKER={params.checker}
+        wagtail_check_upstream {params.sqlite_db} {wildcards.filename} {params.upstream} \
+            "{output.qza}" \
+            && touch {output.qza} \
+            && wagtail_log_fail {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation} \
+            && wagtail_cleanup {log} && exit 0
 
-        export TMPDIR={params.tmpdir}
-        mkdir -p "$TMPDIR"
-        run_and_log_soft_fail \
-            "qiime tools import \
-                --type         'SampleData[SequencesWithQuality]' \
-                --input-path   {input.manifest} \
-                --input-format SingleEndFastqManifestPhred33 \
-                --output-path  {output.qza}" \
-            "touch {output.qza}" \
-            "{params.sqlite_db}" "{wildcards.filename}" "{params.rule_name}" \
-            "{log}" "{params.logger}" "{params.annotation}"
+        export TMPDIR={params.tmpdir}; mkdir -p $TMPDIR
+        set +e
+        qiime tools import \
+            --type 'SampleData[SequencesWithQuality]' \
+            --input-path   {input.manifest} \
+            --input-format SingleEndFastqManifestPhred33 \
+            --output-path  {output.qza} \
+            &> {log}
+        status=$?
+        set -e
+
+        wagtail_handle_status $status {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation} \
+            "{output.qza}"
+        wagtail_cleanup {log}
+        exit 0
         """
 
-
-# -----------------------------------------------------------------------------
-# Step 2 – Quality control
-# -----------------------------------------------------------------------------
+# ── quality_control ───────────────────────────────────────────────────────────
 rule quality_control:
-    """Filter reads by Q-score using QIIME 2 quality-filter."""
     group: "wagtail"
     input:
-        qza = f"{RUN}/1_import_wagtail/{{filename}}-single.qza"
+        qza = f"{run_dir}/{run_name}/1_import_wagtail/{{filename}}-single.qza"
     output:
-        filtered = f"{RUN}/2_qc_wagtail/{{filename}}-filtered.qza",
-        stats    = f"{RUN}/2_qc_wagtail/{{filename}}-qc-stats.qza"
+        filtered = f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}-filtered.qza",
+        stats    = f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}-qc-stats.qza"
     wildcard_constraints:
-        filename = WILDCARD_FILENAME
+        filename = r"[^\.]+"
+    params:
+        sqlite_db = lambda wc: tmp_db(wc.filename),
+        rule_name = "quality_control",
+        upstream  = "qiime2_import",
+        tmpdir    = lambda wc: tmp_dir(wc.filename),
+        logger    = f"{script_dir}/wagtail_sqlite_logger.py",
+        checker   = f"{script_dir}/check_sqlite_status.py",
+        annotation= f"{script_dir}/error_annotation.py",
+        bash_lib  = BASH_LIB
     conda:
-        QIIME_ENV
+        "envs/qiime2.yml"
     log:
-        f"{LOG_ROOT}/{{filename}}/quality_control.log"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/quality_control.log"
     benchmark:
-        f"{LOG_ROOT}/{{filename}}/quality_control.benchmark.log"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/quality_control.benchmark.log"
     threads: 1
     resources:
         mem_mb  = 2000,
         runtime = "1h"
-    params:
-        sqlite_db     = f"{TMP_ROOT}/{{filename}}_log.sql",
-        rule_name     = "quality_control",
-        upstream_rule = "qiime2_import",
-        tmpdir        = f"{TMP_ROOT}/{{filename}}",
-        logger        = LOGGER_SCRIPT,
-        checker       = CHECKER_SCRIPT,
-        annotation    = ANNOTATION_SCRIPT
     shell:
         r"""
-        {SOFT_FAIL_HELPERS}
-        sqlite_status=$(python {params.checker} {params.sqlite_db} \
-            "{wildcards.filename}" "{params.upstream_rule}")
-        soft_fail_upstream "$sqlite_status" \
-            "touch {output.filtered} {output.stats}" \
-            "{params.sqlite_db}" "{wildcards.filename}" "{params.rule_name}" \
-            "{log}" "{params.logger}"
+        source {params.bash_lib}
+        LOGGER={params.logger}
+        CHECKER={params.checker}
+        wagtail_check_upstream {params.sqlite_db} {wildcards.filename} {params.upstream} \
+            "{output.filtered} {output.stats}" \
+            && touch {output.filtered} {output.stats} \
+            && wagtail_log_fail {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation} \
+            && wagtail_cleanup {log} && exit 0
 
         export TMPDIR={params.tmpdir}
-        run_and_log_soft_fail \
-            "qiime quality-filter q-score \
-                --i-demux              {input.qza} \
-                --o-filtered-sequences {output.filtered} \
-                --o-filter-stats       {output.stats}" \
-            "touch {output.filtered} {output.stats}" \
-            "{params.sqlite_db}" "{wildcards.filename}" "{params.rule_name}" \
-            "{log}" "{params.logger}" "{params.annotation}"
+        set +e
+        qiime quality-filter q-score \
+            --i-demux            {input.qza} \
+            --o-filtered-sequences {output.filtered} \
+            --o-filter-stats     {output.stats} \
+            &> {log}
+        status=$?
+        set -e
+
+        wagtail_handle_status $status {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation} \
+            "{output.filtered} {output.stats}"
+        wagtail_cleanup {log}
+        exit 0
         """
 
-
-# -----------------------------------------------------------------------------
-# Step 3 – Deblur denoising
-# -----------------------------------------------------------------------------
+# ── deblur ────────────────────────────────────────────────────────────────────
 rule deblur:
-    """Denoise with Deblur to produce representative sequences and a table."""
     group: "wagtail"
     input:
-        filtered = f"{RUN}/2_qc_wagtail/{{filename}}-filtered.qza"
+        filtered    = f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}-filtered.qza",
+        reference   = lambda wc: get_deblur_db(wc),
     output:
-        representative = f"{RUN}/3_deblur_wagtail/{{filename}}-rep-seqs.qza",
-        table          = f"{RUN}/3_deblur_wagtail/{{filename}}-table.qza",
-        stats          = f"{RUN}/3_deblur_wagtail/{{filename}}-deblur-stats.qza"
+        representative = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-rep-seqs.qza",
+        table          = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-table.qza",
+        stats          = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-deblur-stats.qza"
     wildcard_constraints:
-        filename = WILDCARD_FILENAME
+        filename = r"[^\.]+"
+    params:
+        path      = directory(f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}"),
+        script    = f"{script_dir}/deblur_all.py",
+        marker    = lambda wc: get_marker(wc),
+        sqlite_db = lambda wc: tmp_db(wc.filename),
+        rule_name = "deblur",
+        upstream  = "quality_control",
+        tmpdir    = lambda wc: tmp_dir(wc.filename),
+        logger    = f"{script_dir}/wagtail_sqlite_logger.py",
+        checker   = f"{script_dir}/check_sqlite_status.py",
+        annotation= f"{script_dir}/error_annotation.py",
+        bash_lib  = BASH_LIB
     conda:
-        QIIME_ENV
+        "envs/qiime2.yml"
     log:
-        f"{LOG_ROOT}/{{filename}}/deblur.log"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/deblur.log"
     benchmark:
-        f"{LOG_ROOT}/{{filename}}/deblur.benchmark.log"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/deblur.benchmark.log"
     threads: 1
     resources:
         mem_mb  = 2000,
         runtime = "47h"
-    params:
-        path          = directory(f"{RUN}/3_deblur_wagtail/{{filename}}"),
-        script        = f"{script_dir}/deblur_all.py",
-        sqlite_db     = f"{TMP_ROOT}/{{filename}}_log.sql",
-        rule_name     = "deblur",
-        upstream_rule = "quality_control",
-        tmpdir        = f"{TMP_ROOT}/{{filename}}",
-        logger        = LOGGER_SCRIPT,
-        checker       = CHECKER_SCRIPT,
-        annotation    = ANNOTATION_SCRIPT
     shell:
         r"""
-        {SOFT_FAIL_HELPERS}
-        sqlite_status=$(python {params.checker} {params.sqlite_db} \
-            "{wildcards.filename}" "{params.upstream_rule}")
-        soft_fail_upstream "$sqlite_status" \
-            "mkdir -p {params.path} && touch {output.representative} {output.table} {output.stats}" \
-            "{params.sqlite_db}" "{wildcards.filename}" "{params.rule_name}" \
-            "{log}" "{params.logger}"
+        source {params.bash_lib}
+        LOGGER={params.logger}
+        CHECKER={params.checker}
+        wagtail_check_upstream {params.sqlite_db} {wildcards.filename} {params.upstream} \
+            "{output.representative} {output.table} {output.stats}" \
+            && mkdir -p {params.path} \
+            && touch {output.representative} {output.table} {output.stats} \
+            && wagtail_log_fail {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation} \
+            && wagtail_cleanup {log} && exit 0
 
         export TMPDIR={params.tmpdir}
-        run_and_log_soft_fail \
-            "python {params.script} \
-                -i {input.filtered} \
-                -o {params.path} \
-                -t {threads} \
-                -r {output.representative} \
-                -a {output.table} \
-                -s {output.stats}" \
-            "mkdir -p {params.path} && touch {output.representative} {output.table} {output.stats}" \
-            "{params.sqlite_db}" "{wildcards.filename}" "{params.rule_name}" \
-            "{log}" "{params.logger}" "{params.annotation}"
+        set +e
+        python {params.script} \
+            -i {input.filtered} -o {params.path} -t {threads} \
+            -r {output.representative} -a {output.table} -s {output.stats} \
+            --marker    {params.marker} \
+            --reference {input.reference} \
+            &> {log}
+        status=$?
+        set -e
+
+        if [[ $status -ne 0 ]]; then
+            mkdir -p {params.path}
+            wagtail_log_fail {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation}
+            touch {output.representative} {output.table} {output.stats}
+        else
+            wagtail_log_ok {params.sqlite_db} {wildcards.filename} {params.rule_name} {log}
+        fi
+        wagtail_cleanup {log}
+        exit 0
         """
 
-
-# -----------------------------------------------------------------------------
-# Step 4a – Export representative sequences
-# -----------------------------------------------------------------------------
+# ── export_seqs ───────────────────────────────────────────────────────────────
 rule export_seqs:
-    """Export representative FASTA sequences from the Deblur QZA artifact."""
     group: "wagtail"
     input:
-        representative = f"{RUN}/3_deblur_wagtail/{{filename}}-rep-seqs.qza"
+        representative = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-rep-seqs.qza"
     output:
-        output_dir = directory(f"{RUN}/4_rep_seqs_wagtail/{{filename}}"),
-        fasta      = f"{RUN}/4_rep_seqs_wagtail/{{filename}}/dna-sequences.fasta"
+        output = directory(f"{run_dir}/{run_name}/4_rep_seqs_wagtail/{{filename}}"),
+        final  = f"{run_dir}/{run_name}/4_rep_seqs_wagtail/{{filename}}/dna-sequences.fasta"
     wildcard_constraints:
-        filename = WILDCARD_FILENAME
+        filename = r"[^\.]+"
+    params:
+        script    = f"{script_dir}/qiime2_seqs_export.py",
+        sqlite_db = lambda wc: tmp_db(wc.filename),
+        rule_name = "export_seqs",
+        upstream  = "deblur",
+        tmpdir    = lambda wc: tmp_dir(wc.filename),
+        logger    = f"{script_dir}/wagtail_sqlite_logger.py",
+        checker   = f"{script_dir}/check_sqlite_status.py",
+        annotation= f"{script_dir}/error_annotation.py",
+        bash_lib  = BASH_LIB
     conda:
-        QIIME_ENV
+        "envs/qiime2.yml"
     log:
-        f"{LOG_ROOT}/{{filename}}/export_seqs.log"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/export_seqs.log"
     benchmark:
-        f"{LOG_ROOT}/{{filename}}/export_seqs.benchmark.log"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/export_seqs.benchmark.log"
     threads: 1
     resources:
         mem_mb  = 2000,
         runtime = "1h"
-    params:
-        script        = f"{script_dir}/qiime2_seqs_export.py",
-        sqlite_db     = f"{TMP_ROOT}/{{filename}}_log.sql",
-        rule_name     = "export_seqs",
-        upstream_rule = "deblur",
-        tmpdir        = f"{TMP_ROOT}/{{filename}}",
-        logger        = LOGGER_SCRIPT,
-        checker       = CHECKER_SCRIPT,
-        annotation    = ANNOTATION_SCRIPT
     shell:
         r"""
-        {SOFT_FAIL_HELPERS}
-        sqlite_status=$(python {params.checker} {params.sqlite_db} \
-            "{wildcards.filename}" "{params.upstream_rule}")
-        soft_fail_upstream "$sqlite_status" \
-            "mkdir -p {output.output_dir} && touch {output.fasta}" \
-            "{params.sqlite_db}" "{wildcards.filename}" "{params.rule_name}" \
-            "{log}" "{params.logger}"
+        source {params.bash_lib}
+        LOGGER={params.logger}
+        CHECKER={params.checker}
+        wagtail_check_upstream {params.sqlite_db} {wildcards.filename} {params.upstream} \
+            "{output.final}" \
+            && mkdir -p {output.output} && touch {output.final} \
+            && wagtail_log_fail {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation} \
+            && wagtail_cleanup {log} && exit 0
 
         export TMPDIR={params.tmpdir}
-        run_and_log_soft_fail \
-            "python {params.script} \
-                --input-path  {input.representative} \
-                --output-path {output.output_dir}" \
-            "mkdir -p {output.output_dir} && touch {output.fasta}" \
-            "{params.sqlite_db}" "{wildcards.filename}" "{params.rule_name}" \
-            "{log}" "{params.logger}" "{params.annotation}"
+        set +e
+        python {params.script} \
+            --input-path  {input.representative} \
+            --output-path {output.output} \
+            &> {log}
+        status=$?
+        set -e
+
+        wagtail_handle_status $status {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation} \
+            "{output.final}"
+        wagtail_cleanup {log}
+        exit 0
         """
 
-
-# -----------------------------------------------------------------------------
-# Step 4b – Export and edit abundance table
-# -----------------------------------------------------------------------------
-rule export_and_edit_table:
-    """Export BIOM table from Deblur QZA and convert to TSV."""
-    group: "wagtail"
-    input:
-        table = f"{RUN}/3_deblur_wagtail/{{filename}}-table.qza"
-    output:
-        folder = directory(f"{RUN}/4_table_wagtail/{{filename}}_biom"),
-        biom   = f"{RUN}/4_table_wagtail/{{filename}}_biom/{{filename}}.biom",
-        table  = f"{RUN}/4_table_wagtail/{{filename}}_table.tsv",
-        edited = f"{RUN}/5_taxonomy_wagtail/{{filename}}/{{filename}}_table_edit.tsv"
-    wildcard_constraints:
-        filename = WILDCARD_FILENAME
-    conda:
-        QIIME_ENV
-    log:
-        f"{LOG_ROOT}/{{filename}}/export_and_edit_table.log"
-    benchmark:
-        f"{LOG_ROOT}/{{filename}}/export_and_edit_table.benchmark.log"
-    threads: 1
-    resources:
-        mem_mb  = 1000,
-        runtime = "1h"
-    params:
-        script        = f"{script_dir}/qiime2_biom_export.py",
-        biom_name     = "{filename}.biom",
-        sqlite_db     = f"{TMP_ROOT}/{{filename}}_log.sql",
-        rule_name     = "export_and_edit_table",
-        upstream_rule = "deblur",
-        tmpdir        = f"{TMP_ROOT}/{{filename}}",
-        logger        = LOGGER_SCRIPT,
-        checker       = CHECKER_SCRIPT,
-        annotation    = ANNOTATION_SCRIPT
-    shell:
-        r"""
-        {SOFT_FAIL_HELPERS}
-        sqlite_status=$(python {params.checker} {params.sqlite_db} \
-            "{wildcards.filename}" "{params.upstream_rule}")
-        soft_fail_upstream "$sqlite_status" \
-            "mkdir -p {output.folder} && touch {output.biom} {output.table} {output.edited}" \
-            "{params.sqlite_db}" "{wildcards.filename}" "{params.rule_name}" \
-            "{log}" "{params.logger}"
-
-        export TMPDIR={params.tmpdir}
-        run_and_log_soft_fail \
-            "python {params.script} \
-                --input-path   {input.table} \
-                --output-path  {output.folder} \
-                --new-filename {params.biom_name} \
-            && biom convert \
-                -i {output.biom} \
-                -o {output.table} \
-                --to-tsv \
-            && tail -n +3 {output.table} > {output.edited}" \
-            "mkdir -p {output.folder} && touch {output.biom} {output.table} {output.edited}" \
-            "{params.sqlite_db}" "{wildcards.filename}" "{params.rule_name}" \
-            "{log}" "{params.logger}" "{params.annotation}"
-        """
-
-
-# -----------------------------------------------------------------------------
-# Step 5 – Minimap2 alignment (mappy)
-# -----------------------------------------------------------------------------
+# ── mappy ─────────────────────────────────────────────────────────────────────
 rule mappy:
-    """Align representative sequences against the reference database with Mappy."""
     group: "wagtail"
     input:
-        fasta = f"{RUN}/4_rep_seqs_wagtail/{{filename}}/dna-sequences.fasta",
-        ref   = f"{db_dir}/danica.mmi"
+        F   = f"{run_dir}/{run_name}/4_rep_seqs_wagtail/{{filename}}/dna-sequences.fasta",
+        ref = lambda wc: get_mappy_ref(wc),
     output:
-        align = f"{RUN}/5_taxonomy_wagtail/{{filename}}/{{filename}}_alignment.tsv",
-        meta  = f"{RUN}/5_taxonomy_wagtail/{{filename}}/{{filename}}_metadata.tsv"
+        align = f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_alignment.tsv",
+        meta  = f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_metadata.tsv"
     wildcard_constraints:
-        filename = WILDCARD_FILENAME
+        filename = r"[^\.]+"
+    params:
+        script    = f"{script_dir}/mappy_script.py",
+        sample    = "{filename}",
+        sqlite_db = lambda wc: tmp_db(wc.filename),
+        rule_name = "mappy",
+        upstream  = "export_seqs",
+        logger    = f"{script_dir}/wagtail_sqlite_logger.py",
+        checker   = f"{script_dir}/check_sqlite_status.py",
+        annotation= f"{script_dir}/error_annotation.py",
+        bash_lib  = BASH_LIB
     conda:
-        MAPPY_ENV
+        "envs/mappy.yaml"
     log:
-        f"{LOG_ROOT}/{{filename}}/mappy.log"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/mappy.log"
     benchmark:
-        f"{LOG_ROOT}/{{filename}}/mappy.benchmark.log"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/mappy.benchmark.log"
     threads: 1
     resources:
         mem_mb  = 4000,
         runtime = "24h"
-    params:
-        script        = f"{script_dir}/mappy_script.py",
-        sample        = "{filename}",
-        sqlite_db     = f"{TMP_ROOT}/{{filename}}_log.sql",
-        rule_name     = "mappy",
-        upstream_rule = "export_seqs",
-        logger        = LOGGER_SCRIPT,
-        checker       = CHECKER_SCRIPT,
-        annotation    = ANNOTATION_SCRIPT
     shell:
         r"""
-        {SOFT_FAIL_HELPERS}
-        sqlite_status=$(python {params.checker} {params.sqlite_db} \
-            "{wildcards.filename}" "{params.upstream_rule}")
-        soft_fail_upstream "$sqlite_status" \
-            "touch {output.align} {output.meta}" \
-            "{params.sqlite_db}" "{wildcards.filename}" "{params.rule_name}" \
-            "{log}" "{params.logger}"
+        source {params.bash_lib}
+        LOGGER={params.logger}
+        CHECKER={params.checker}
+        wagtail_check_upstream {params.sqlite_db} {wildcards.filename} {params.upstream} \
+            "{output.align} {output.meta}" \
+            && touch {output.align} {output.meta} \
+            && wagtail_log_fail {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation} \
+            && wagtail_cleanup {log} && exit 0
 
-        run_and_log_soft_fail \
-            "python {params.script} \
-                -i {input.fasta} \
-                -r {input.ref} \
-                -a {output.align} \
-                -m {output.meta} \
-                -s {params.sample}" \
-            "touch {output.align} {output.meta}" \
-            "{params.sqlite_db}" "{wildcards.filename}" "{params.rule_name}" \
-            "{log}" "{params.logger}" "{params.annotation}"
+        set +e
+        python {params.script} \
+            -i {input.F} -r {input.ref} \
+            -a {output.align} -m {output.meta} -s {params.sample} \
+            &> {log}
+        status=$?
+        set -e
+
+        wagtail_handle_status $status {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation} \
+            "{output.align} {output.meta}"
+        wagtail_cleanup {log}
+        exit 0
         """
 
-
-# -----------------------------------------------------------------------------
-# Step 6 – Extract taxonomy
-# -----------------------------------------------------------------------------
-rule extract_taxonomy:
-    """Combine alignment and abundance table into a condensed taxonomy profile."""
+# ── export_and_edit_table ─────────────────────────────────────────────────────
+rule export_and_edit_table:
     group: "wagtail"
     input:
-        alignment = f"{RUN}/5_taxonomy_wagtail/{{filename}}/{{filename}}_alignment.tsv",
-        table     = f"{RUN}/5_taxonomy_wagtail/{{filename}}/{{filename}}_table_edit.tsv"
+        table = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-table.qza"
     output:
-        condensed = f"{RUN}/6_condensed_wagtail/{{filename}}_condensed.tsv"
+        folder = directory(f"{run_dir}/{run_name}/4_table_wagtail/{{filename}}_biom"),
+        biom   = f"{run_dir}/{run_name}/4_table_wagtail/{{filename}}_biom/{{filename}}.biom",
+        table  = f"{run_dir}/{run_name}/4_table_wagtail/{{filename}}_table.tsv",
+        edited = f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_table_edit.tsv"
     wildcard_constraints:
-        filename = WILDCARD_FILENAME
+        filename = r"[^\.]+"
+    params:
+        script    = f"{script_dir}/qiime2_biom_export.py",
+        name      = "{filename}.biom",
+        sqlite_db = lambda wc: tmp_db(wc.filename),
+        rule_name = "export_and_edit_table",
+        upstream  = "deblur",
+        tmpdir    = lambda wc: tmp_dir(wc.filename),
+        logger    = f"{script_dir}/wagtail_sqlite_logger.py",
+        checker   = f"{script_dir}/check_sqlite_status.py",
+        annotation= f"{script_dir}/error_annotation.py",
+        bash_lib  = BASH_LIB
     conda:
-        MAPPY_ENV
+        "envs/qiime2.yml"
     log:
-        f"{LOG_ROOT}/{{filename}}/extract_taxonomy.log"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/export_and_edit_table.log"
     benchmark:
-        f"{LOG_ROOT}/{{filename}}/extract_taxonomy.benchmark.log"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/export_and_edit_table.benchmark.log"
+    threads: 1
+    resources:
+        mem_mb  = 1000,
+        runtime = "1h"
+    shell:
+        r"""
+        source {params.bash_lib}
+        LOGGER={params.logger}
+        CHECKER={params.checker}
+        wagtail_check_upstream {params.sqlite_db} {wildcards.filename} {params.upstream} \
+            "{output.biom} {output.table} {output.edited}" \
+            && mkdir -p {output.folder} && touch {output.biom} {output.table} {output.edited} \
+            && wagtail_log_fail {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation} \
+            && wagtail_cleanup {log} && exit 0
+
+        export TMPDIR={params.tmpdir}
+        set +e
+        python {params.script} \
+            --input-path   {input.table} \
+            --output-path  {output.folder} \
+            --new-filename {params.name} \
+            && biom convert -i {output.biom} -o {output.table} --to-tsv \
+            && tail -n +3 {output.table} > {output.edited} \
+            &> {log}
+        status=$?
+        set -e
+
+        if [[ $status -ne 0 ]]; then
+            mkdir -p {output.folder}
+            wagtail_log_fail {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation}
+            touch {output.biom} {output.table} {output.edited}
+        else
+            wagtail_log_ok {params.sqlite_db} {wildcards.filename} {params.rule_name} {log}
+        fi
+        wagtail_cleanup {log}
+        exit 0
+        """
+
+# ── extract_taxonomy ──────────────────────────────────────────────────────────
+rule extract_taxonomy:
+    group: "wagtail"
+    input:
+        primary     = f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_alignment.tsv",
+        table       = f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_table_edit.tsv",
+        reference   = lambda wc: get_tax_ref(wc),
+    output:
+        condensed = f"{run_dir}/{run_name}/6_condensed_wagtail/{{filename}}_condensed.tsv"
+    wildcard_constraints:
+        filename = r"[^\.]+"
+    params:
+        script    = f"{script_dir}/extract_taxonomy.py",
+        sample    = "{filename}",
+        sqlite_db = lambda wc: tmp_db(wc.filename),
+        rule_name = "extract_taxonomy",
+        upstream  = "mappy",
+        logger    = f"{script_dir}/wagtail_sqlite_logger.py",
+        checker   = f"{script_dir}/check_sqlite_status.py",
+        annotation= f"{script_dir}/error_annotation.py",
+        bash_lib  = BASH_LIB
+    conda:
+        "envs/mappy.yaml"
+    log:
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/extract_taxonomy.log"
+    benchmark:
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/extract_taxonomy.benchmark.log"
     threads: 1
     resources:
         mem_mb  = 160,
         runtime = "1h"
-    params:
-        sample        = "{filename}",
-        script        = f"{script_dir}/extract_taxonomy_danica.py",
-        sqlite_db     = f"{TMP_ROOT}/{{filename}}_log.sql",
-        rule_name     = "extract_taxonomy",
-        upstream_rule = "mappy",
-        logger        = LOGGER_SCRIPT,
-        checker       = CHECKER_SCRIPT,
-        annotation    = ANNOTATION_SCRIPT
     shell:
         r"""
-        {SOFT_FAIL_HELPERS}
-        sqlite_status=$(python {params.checker} {params.sqlite_db} \
-            "{wildcards.filename}" "{params.upstream_rule}")
-        soft_fail_upstream "$sqlite_status" \
-            "touch {output.condensed}" \
-            "{params.sqlite_db}" "{wildcards.filename}" "{params.rule_name}" \
-            "{log}" "{params.logger}"
+        source {params.bash_lib}
+        LOGGER={params.logger}
+        CHECKER={params.checker}
+        wagtail_check_upstream {params.sqlite_db} {wildcards.filename} {params.upstream} \
+            "{output.condensed}" \
+            && touch {output.condensed} \
+            && wagtail_log_fail {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation} \
+            && wagtail_cleanup {log} && exit 0
 
-        run_and_log_soft_fail \
-            "python {params.script} \
-                -i {input.alignment} \
-                -t {input.table} \
-                -o {output.condensed} \
-                -s {params.sample}" \
-            "touch {output.condensed}" \
-            "{params.sqlite_db}" "{wildcards.filename}" "{params.rule_name}" \
-            "{log}" "{params.logger}" "{params.annotation}"
+        set +e
+        python {params.script} \
+            -i {input.primary} -t {input.table} -r {input.reference} \
+            -o {output.condensed} -s {params.sample} \
+            &> {log}
+        status=$?
+        set -e
+
+        wagtail_handle_status $status {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation} \
+            "{output.condensed}"
+        wagtail_cleanup {log}
+        exit 0
         """
 
-
-# -----------------------------------------------------------------------------
-# Step 7a – Export QIIME 2 stats (QC + Deblur)
-# -----------------------------------------------------------------------------
+# ── qiime_stats ───────────────────────────────────────────────────────────────
 rule qiime_stats:
-    """Export QC and Deblur statistics from QZA artifacts to CSV."""
     group: "wagtail"
     input:
-        qc     = f"{RUN}/2_qc_wagtail/{{filename}}-qc-stats.qza",
-        deblur = f"{RUN}/3_deblur_wagtail/{{filename}}-deblur-stats.qza"
+        qc     = f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}-qc-stats.qza",
+        deblur = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-deblur-stats.qza"
     output:
-        qc_dir     = directory(f"{RUN}/2_qc_wagtail/{{filename}}"),
-        deblur_dir = directory(f"{RUN}/3_deblur_wagtail/{{filename}}"),
-        qc_csv     = f"{RUN}/2_qc_wagtail/{{filename}}/stats.csv",
-        deblur_csv = f"{RUN}/3_deblur_wagtail/{{filename}}/stats.csv"
+        qc_dir      = directory(f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}"),
+        deblur_dir  = directory(f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}"),
+        final_qc    = f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}/stats.csv",
+        final_deblur= f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}/stats.csv"
     wildcard_constraints:
-        filename = WILDCARD_FILENAME
+        filename = r"[^\.]+"
+    params:
+        script    = f"{script_dir}/wagtail_metadata_qiimes.py",
+        sqlite_db = lambda wc: tmp_db(wc.filename),
+        rule_name = "qiime_stats",
+        upstream  = "deblur",
+        tmpdir    = lambda wc: tmp_dir(wc.filename),
+        logger    = f"{script_dir}/wagtail_sqlite_logger.py",
+        checker   = f"{script_dir}/check_sqlite_status.py",
+        annotation= f"{script_dir}/error_annotation.py",
+        bash_lib  = BASH_LIB
     conda:
-        QIIME_ENV
+        "envs/qiime2.yml"
     log:
-        f"{LOG_ROOT}/{{filename}}/qiime_stats.log"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/qiime_stats.log"
     benchmark:
-        f"{LOG_ROOT}/{{filename}}/qiime_stats.benchmark.log"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/qiime_stats.benchmark.log"
     threads: 1
     resources:
         mem_mb  = 640,
         runtime = "1h"
-    params:
-        script        = f"{script_dir}/wagtail_metadata_qiimes.py",
-        sqlite_db     = f"{TMP_ROOT}/{{filename}}_log.sql",
-        rule_name     = "qiime_stats",
-        upstream_rule = "deblur",
-        tmpdir        = f"{TMP_ROOT}/{{filename}}",
-        logger        = LOGGER_SCRIPT,
-        checker       = CHECKER_SCRIPT,
-        annotation    = ANNOTATION_SCRIPT
     shell:
         r"""
-        {SOFT_FAIL_HELPERS}
+        source {params.bash_lib}
+        LOGGER={params.logger}
+        CHECKER={params.checker}
+        wagtail_check_upstream {params.sqlite_db} {wildcards.filename} {params.upstream} \
+            "{output.final_qc} {output.final_deblur}" \
+            && mkdir -p {output.qc_dir} {output.deblur_dir} \
+            && touch {output.final_qc} {output.final_deblur} \
+            && wagtail_log_fail {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation} \
+            && wagtail_cleanup {log} && exit 0
 
-        # (1) Propagate upstream failure
-        sqlite_status=$(python {params.checker} {params.sqlite_db} \
-            "{wildcards.filename}" "{params.upstream_rule}")
-        soft_fail_upstream "$sqlite_status" \
-            "mkdir -p {output.qc_dir} {output.deblur_dir} && touch {output.qc_csv} {output.deblur_csv}" \
-            "{params.sqlite_db}" "{wildcards.filename}" "{params.rule_name}" \
-            "{log}" "{params.logger}"
-
-        # (2) Guard: both QZA inputs must be non-empty to proceed
-        #     (upstream OK but Deblur produced an empty artifact)
-        if [ ! -s {input.qc} ] || [ ! -s {input.deblur} ]; then
-            echo "Empty input QZA — marking as FAILED" > "{log}"
-            python {params.logger} {params.sqlite_db} "{wildcards.filename}" \
-                "{params.rule_name}" FAILED "{log}" "Empty input QZA"
+        # Also guard against empty upstream outputs
+        if [[ ! -s {input.qc} ]] || [[ ! -s {input.deblur} ]]; then
             mkdir -p {output.qc_dir} {output.deblur_dir}
-            touch {output.qc_csv} {output.deblur_csv}
+            touch {output.final_qc} {output.final_deblur}
+            echo "Upstream fails" > {log}
+            wagtail_log_fail {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation}
+            wagtail_cleanup {log}
             exit 0
         fi
 
         export TMPDIR={params.tmpdir}
-        run_and_log_soft_fail \
-            "python {params.script} \
-                --input-qc      {input.qc} \
-                --output-qc     {output.qc_dir} \
-                --input-deblur  {input.deblur} \
-                --output-deblur {output.deblur_dir}" \
-            "mkdir -p {output.qc_dir} {output.deblur_dir} && touch {output.qc_csv} {output.deblur_csv}" \
-            "{params.sqlite_db}" "{wildcards.filename}" "{params.rule_name}" \
-            "{log}" "{params.logger}" "{params.annotation}"
+        set +e
+        python {params.script} \
+            --input-qc     {input.qc}     --output-qc     {output.qc_dir} \
+            --input-deblur {input.deblur} --output-deblur {output.deblur_dir} \
+            &> {log}
+        status=$?
+        set -e
+
+        if [[ $status -ne 0 ]]; then
+            mkdir -p {output.qc_dir} {output.deblur_dir}
+            touch {output.final_qc} {output.final_deblur}
+            wagtail_log_fail {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation}
+        else
+            wagtail_log_ok {params.sqlite_db} {wildcards.filename} {params.rule_name} {log}
+        fi
+        wagtail_cleanup {log}
+        exit 0
         """
 
-
-# -----------------------------------------------------------------------------
-# Step 7b – Per-sample metadata
-# -----------------------------------------------------------------------------
+# ── metadata_creation ─────────────────────────────────────────────────────────
 rule metadata_creation:
-    """Combine QC, Deblur and alignment metadata into one per-sample TSV."""
     group: "wagtail"
     input:
-        qc_csv     = f"{RUN}/2_qc_wagtail/{{filename}}/stats.csv",
-        deblur_csv = f"{RUN}/3_deblur_wagtail/{{filename}}/stats.csv",
-        mappy_meta = f"{RUN}/5_taxonomy_wagtail/{{filename}}/{{filename}}_metadata.tsv"
+        final_qc    = f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}/stats.csv",
+        final_deblur= f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}/stats.csv",
+        final_mappy = f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_metadata.tsv"
     output:
-        directory = directory(f"{RUN}/7_metadata/{{filename}}"),
-        metadata  = f"{RUN}/7_metadata/{{filename}}/{{filename}}_metadata.tsv"
+        directory = directory(f"{run_dir}/{run_name}/7_metadata/{{filename}}"),
+        final     = f"{run_dir}/{run_name}/7_metadata/{{filename}}/{{filename}}_metadata.tsv"
     wildcard_constraints:
-        filename = WILDCARD_FILENAME
+        filename = r"[^\.]+"
+    params:
+        script    = f"{script_dir}/wagtail_metadata_meta_combine.py",
+        sqlite_db = lambda wc: tmp_db(wc.filename),
+        run       = "{filename}",
+        rule_name = "metadata_creation",
+        upstream  = "qiime_stats",
+        tmpdir    = lambda wc: tmp_dir(wc.filename),
+        logger    = f"{script_dir}/wagtail_sqlite_logger.py",
+        checker   = f"{script_dir}/check_sqlite_status.py",
+        annotation= f"{script_dir}/error_annotation.py",
+        bash_lib  = BASH_LIB
     conda:
-        MAPPY_ENV
+        "envs/mappy.yaml"
     log:
-        f"{LOG_ROOT}/{{filename}}/metadata.log"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/metadata.log"
     benchmark:
-        f"{LOG_ROOT}/{{filename}}/metadata.benchmark.log"
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/metadata.benchmark.log"
     threads: 1
     resources:
         mem_mb  = 320,
         runtime = "1h"
-    params:
-        script        = f"{script_dir}/wagtail_metadata_meta_combine.py",
-        run           = "{filename}",
-        sqlite_db     = f"{TMP_ROOT}/{{filename}}_log.sql",
-        rule_name     = "metadata_creation",
-        upstream_rule = "qiime_stats",
-        tmpdir        = f"{TMP_ROOT}/{{filename}}",
-        logger        = LOGGER_SCRIPT,
-        checker       = CHECKER_SCRIPT,
-        annotation    = ANNOTATION_SCRIPT
     shell:
         r"""
-        {SOFT_FAIL_HELPERS}
-        sqlite_status=$(python {params.checker} {params.sqlite_db} \
-            "{wildcards.filename}" "{params.upstream_rule}")
-        soft_fail_upstream "$sqlite_status" \
-            "mkdir -p {output.directory} && touch {output.metadata}" \
-            "{params.sqlite_db}" "{wildcards.filename}" "{params.rule_name}" \
-            "{log}" "{params.logger}"
+        source {params.bash_lib}
+        LOGGER={params.logger}
+        CHECKER={params.checker}
+        wagtail_check_upstream {params.sqlite_db} {wildcards.filename} {params.upstream} \
+            "{output.final}" \
+            && mkdir -p {output.directory} && touch {output.final} \
+            && wagtail_log_fail {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation} \
+            && wagtail_cleanup {log} && exit 0
 
-        run_and_log_soft_fail \
-            "python {params.script} \
-                --qc-file     {input.qc_csv} \
-                --deblur-file {input.deblur_csv} \
-                --mappy-file  {input.mappy_meta} \
-                --output-path {output.directory} \
-                --run-name    {params.run}" \
-            "mkdir -p {output.directory} && touch {output.metadata}" \
-            "{params.sqlite_db}" "{wildcards.filename}" "{params.rule_name}" \
-            "{log}" "{params.logger}" "{params.annotation}"
+        set +e
+        python {params.script} \
+            --qc-file     {input.final_qc} \
+            --deblur-file {input.final_deblur} \
+            --mappy-file  {input.final_mappy} \
+            --output-path {output.directory} \
+            --run-name    {params.run} \
+            &> {log}
+        status=$?
+        set -e
+
+        if [[ $status -ne 0 ]]; then
+            mkdir -p {output.directory}
+            echo "ERROR: metadata_creation failed for {wildcards.filename}" > {output.final}
+            wagtail_log_fail {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation}
+        else
+            wagtail_log_ok {params.sqlite_db} {wildcards.filename} {params.rule_name} {log}
+        fi
+        wagtail_cleanup {log}
+        exit 0
         """
 
-
-# -----------------------------------------------------------------------------
-# Step 8 – Cleanup & merge
-# -----------------------------------------------------------------------------
+# ── cleanup ───────────────────────────────────────────────────────────────────
 rule cleanup:
-    """
-    Final rule — runs after all per-sample rules are complete:
-      1. Merges per-sample SQLite logs into one run-level database.
-      2. Combines per-sample metadata TSVs into a single run-level file.
-      3. Removes all intermediate directories to free inodes/disk space.
-    """
     group: "cleanup"
     input:
-        metadata  = expand(f"{RUN}/7_metadata/{{filename}}/{{filename}}_metadata.tsv", filename=filenames),
-        community = expand(f"{RUN}/6_condensed_wagtail/{{filename}}_condensed.tsv",    filename=filenames)
+        metadata  = expand(f"{run_dir}/{run_name}/7_metadata/{{filename}}/{{filename}}_metadata.tsv", filename=filenames),
+        community = expand(f"{run_dir}/{run_name}/6_condensed_wagtail/{{filename}}_condensed.tsv",    filename=filenames)
     output:
-        merged        = sqlite_db_path,
-        cleanup_done  = f"{LOG_ROOT}/cleanup_done.txt",
-        full_metadata = f"{RUN}/7_metadata/{run_name}_full_metadata.tsv"
+        merged        = sql_log,
+        cleanup_done  = f"{run_dir}/{run_name}/0_logs_wagtail/cleanup_done.txt",
+        full_metadata = f"{run_dir}/{run_name}/7_metadata/{run_name}_full_metadata.tsv"
     wildcard_constraints:
-        filename = WILDCARD_FILENAME
+        filename = r"[^\.]+"
+    params:
+        merge_script = f"{script_dir}/sql_merge.py",
+        dbs          = expand(f"{run_dir}/{run_name}/0_tmp/{{filename}}_log.sql", filename=filenames),
+        target       = lambda w, output: str(Path(output.merged).parent.parent),
+        tmpdir       = lambda w, output: str(Path(output.merged).parent.parent / "0_tmp")
     conda:
-        MAPPY_ENV
+        "envs/mappy.yaml"
     log:
-        merger        = f"{LOG_ROOT}/merger.log",
-        cleaning      = f"{LOG_ROOT}/cleaning.log",
-        full_metadata = f"{LOG_ROOT}/full_metadata.log"
+        merger       = f"{run_dir}/{run_name}/0_logs_wagtail/merger.log",
+        cleaning     = f"{run_dir}/{run_name}/0_logs_wagtail/cleaning.log",
+        full_metadata= f"{run_dir}/{run_name}/0_logs_wagtail/full_metadata.log"
     threads: 1
     resources:
         mem_mb  = 2000,
         runtime = "2h"
-    params:
-        merge_script = f"{script_dir}/sql_merge.py",
-        per_sample_dbs = expand(f"{TMP_ROOT}/{{filename}}_log.sql", filename=filenames),
-        run_root     = RUN,
-        tmpdir       = TMP_ROOT
     shell:
         r"""
-        # ------------------------------------------------------------------
-        # 1. Merge per-sample SQLite logs
-        # ------------------------------------------------------------------
-        python {params.merge_script} {output.merged} {params.per_sample_dbs} \
-            &> {log.merger}
+        # Step 1: Merge per-sample SQLite logs
+        touch {input.metadata[0]} {input.community[0]}
+        python {params.merge_script} {output.merged} {params.dbs} &> {log.merger}
+        sleep 2
 
-        # ------------------------------------------------------------------
-        # 2. Combine per-sample metadata into one run-level TSV
-        #    Strategy: write header from the first file, then append data
-        #    rows (skip header) from all files.
-        # ------------------------------------------------------------------
-        (
-            head -n 1 {input.metadata[0]}
-            tail -n +2 -q {input.metadata}
-        ) > {output.full_metadata} 2> {log.full_metadata}
-
-        # ------------------------------------------------------------------
-        # 3. Remove intermediate directories
-        #    Targets:
-        #      0_manifest/          - per-sample manifest CSVs
-        #      0_tmp/               - per-sample SQLite logs
-        #      1_import_wagtail/    - raw QZA imports
-        #      2_qc_wagtail/        - QC QZAs and exported stats
-        #      3_deblur_wagtail/    - Deblur QZAs and exported stats
-        #      4_rep_seqs_wagtail/  - exported FASTA files
-        #      4_table_wagtail/     - exported BIOM/TSV tables
-        #      5_taxonomy_wagtail/  - alignment and intermediate TSVs
-        # ------------------------------------------------------------------
-        rm -rf \
-            {params.run_root}/0_manifest \
-            {params.tmpdir} \
-            {params.run_root}/1_import_wagtail \
-            {params.run_root}/2_qc_wagtail \
-            {params.run_root}/3_deblur_wagtail \
-            {params.run_root}/4_rep_seqs_wagtail \
-            {params.run_root}/4_table_wagtail \
-            {params.run_root}/5_taxonomy_wagtail \
-            2> {log.cleaning}
-
+        # Step 2: Clean intermediate directories
+        rm -rf {params.tmpdir}
+        rm -rf {params.target}/[1-3]_* {params.target}/5_*
         touch {output.cleanup_done}
-        echo "Cleanup complete at $(date)" >> {log.cleaning}
+        echo "Cleanup completed" &> {log.cleaning}
+
+        # Step 3: Merge per-sample metadata into one file
+        (head -n 1 {input.metadata[0]} > {output.full_metadata} \
+            && tail -n +2 -q {input.metadata} >> {output.full_metadata}) \
+            &> {log.full_metadata}
         """
