@@ -585,13 +585,12 @@ rule export_and_edit_table:
 
         export TMPDIR={params.tmpdir}
         set +e
-        python {params.script} \
+        {{ python {params.script} \
             --input-path   {input.table} \
             --output-path  {output.folder} \
             --new-filename {params.name} \
             && biom convert -i {output.biom} -o {output.table} --to-tsv \
-            && tail -n +3 {output.table} > {output.edited} \
-            &> {log}
+            && tail -n +3 {output.table} > {output.edited}; }} &> {log}
         status=$?
         set -e
 
@@ -610,7 +609,7 @@ rule export_and_edit_table:
 rule extract_taxonomy:
     group: "wagtail"
     input:
-        primary     = f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_alignment.tsv",
+        align       = f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_alignment.tsv",
         table       = f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_table_edit.tsv",
         reference   = lambda wc: get_tax_ref(wc),
     output:
@@ -650,7 +649,7 @@ rule extract_taxonomy:
 
         set +e
         python {params.script} \
-            -i {input.primary} -t {input.table} -r {input.reference} \
+            -i {input.align} -t {input.table} -r {input.reference} \
             -o {output.condensed} -s {params.sample} \
             &> {log}
         status=$?
@@ -839,7 +838,7 @@ rule cleanup:
 
         # Step 2: Clean intermediate directories
         rm -rf {params.tmpdir}
-        rm -rf {params.target}/[1-3]_* {params.target}/5_*
+        #rm -rf {params.target}/[1-3]_* {params.target}/5_*
         touch {output.cleanup_done}
         echo "Cleanup completed" &> {log.cleaning}
 
