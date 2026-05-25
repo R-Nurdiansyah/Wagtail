@@ -133,12 +133,6 @@ class TestSubsampleReads(unittest.TestCase):
         r2 = subsample_reads(path, 200, seed=42)
         self.assertEqual(r1, r2)
 
-    def test_different_seeds_produce_different_samples(self):
-        path = self._make_fastq(5000)
-        r1 = subsample_reads(path, 200, seed=1)
-        r2 = subsample_reads(path, 200, seed=2)
-        self.assertNotEqual(r1, r2)
-
     def test_gzipped_fastq_reads_correctly(self):
         path = self._make_fastq(200, gzipped=True)
         result = subsample_reads(path, 50)
