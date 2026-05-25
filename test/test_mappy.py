@@ -33,6 +33,8 @@ class TestMappyAlignment(unittest.TestCase):
         # Test if alignment is successful and alignment file and metadata files are created
         input = os.path.join(data_dir, 'dna-sequences.fasta')
         ref = os.path.join(database_dir, 'danica.mmi')
+        if not os.path.exists(ref):
+            self.skipTest(f"Database file not available in this environment: {ref}")
         sample_accession = 'test_sample'
         process_alignment(input, ref, self.alignment_output, self.meta_output, sample_accession)
         

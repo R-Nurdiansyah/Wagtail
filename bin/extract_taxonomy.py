@@ -39,8 +39,7 @@ sys.path = [os.path.join(os.path.dirname(os.path.realpath(__file__)),'..')] + sy
 def extract_taxonomy(input_alignment, input_table, input_taxonomy_reference, sample_name, output_taxonomy_list):
     df  = pl.read_csv(input_alignment, separator='\t', has_header=False)
     df_table = pl.read_csv(input_table, separator='\t', has_header=False)
-    ref = pl.read_csv(input_taxonomy_reference, separator='\t', has_header=False)
-    logging.info(f"Read input {len(ref)} taxonomy entry from the Database")
+
     joined = df.join(df_table, on="column_1", how="inner")
 
     hit_counts = joined["column_1"].value_counts()
@@ -48,14 +47,28 @@ def extract_taxonomy(input_alignment, input_table, input_taxonomy_reference, sam
     joined = joined.with_columns(
         (pl.col("column_2_right") / pl.col("count")).round().alias("coverage"))
     per_taxonomy = joined.group_by("column_2").agg(pl.sum("coverage")).rename({"column_2": "id"})
-    combined = (per_taxonomy
-              .join(ref, left_on="id", right_on="column_1", how="left")
-              .group_by("column_2").agg(pl.sum("coverage").alias("coverage"))
-              .sort("coverage", descending=True)
-              .with_columns(pl.col("column_2").str.replace("^", "Root;"))
-                )
-    final = combined.rename({"column_2": "taxonomy"})
-    final = final.with_columns(pl.Series("sample", [sample_name]*len(final)))
+
+    if input_taxonomy_reference is not None:
+        # External reference database (e.g. GG2): join contig IDs to taxonomy strings.
+        # Use inner join so only contigs with a known taxonomy are retained.
+        ref = pl.read_csv(input_taxonomy_reference, separator='\t', has_header=False)
+        logging.info(f"Read {len(ref)} taxonomy entries from reference database")
+        combined = (per_taxonomy
+                    .join(ref, left_on="id", right_on="column_1", how="inner")
+                    .group_by("column_2").agg(pl.sum("coverage").alias("coverage"))
+                    .sort("coverage", descending=True)
+                    .with_columns(pl.col("column_2").str.replace("^", "Root;"))
+                    )
+        final = combined.rename({"column_2": "taxonomy"})
+    else:
+        # No external reference: taxonomy is embedded in the contig names themselves.
+        combined = (per_taxonomy
+                    .sort("coverage", descending=True)
+                    .with_columns(pl.col("id").str.replace("^", "Root; "))
+                    )
+        final = combined.rename({"id": "taxonomy"})
+
+    final = final.with_columns(pl.Series("sample", [sample_name] * len(final)))
     final = final[["sample", "coverage", "taxonomy"]]
     final.write_csv(output_taxonomy_list, separator='\t', include_header=True)
 

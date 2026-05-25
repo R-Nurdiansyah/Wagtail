@@ -3,7 +3,7 @@ authors = ["R-Nurdiansyah <rizky.nurdiansyah@hdr.qut.edu.au>"]
 channels = ["conda-forge", "bioconda"]
 name = "wagtail"
 platforms = ["linux-64"]
-version = "0.1.0"
+version = "0.15.0"
 
 [tasks]
 

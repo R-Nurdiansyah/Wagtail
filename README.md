@@ -4,7 +4,7 @@
 _Version 0.15_
 
 Wagtail is an accurate and scalable tool to analyze amplicon sequencing datasets with easy-to-swap reference databases. As of version 0.15, Wagtail supports **16S, 18S, ITS, and CO1** amplicon sequences sequenced from the Illumina platform.\
-The tool is a combination of Qiime 2 [Deblur](https://github.com/biocore/deblur/blob/master/README.md) plugin for quality control and Minimap2 aligner to align representative sequences from Deblur. The result is a taxonomy profile in the format of condensed and running metadata. The combination is weaved using [Snakemake](https://snakemake.github.io/) to allow easy reproducibility, benchmarking, and packaging.\
+The tool is a combination of Qiime 2 [Deblur](https://library.qiime2.org/plugins/qiime2/q2-deblur/overview) plugin for quality control and [Minimap2](https://github.com/lh3/minimap2) aligner to align representative sequences from Deblur. The result is a taxonomy profile in the format of condensed and running metadata. The combination is weaved using [Snakemake](https://snakemake.github.io/) to allow easy reproducibility, benchmarking, and packaging.\
 [Minimap2](https://github.com/lh3/minimap2), in the form of its Python interface (Mappy), is chosen for its versatility in using reference databases without or with minor modification. Users only need to provide the database in FASTA format, or use the Minimap2 index format for faster loading (optional).
 
 KEY FEATURES
@@ -62,14 +62,14 @@ Wagtail v0.15 requires marker-specific databases placed in the `database/` direc
 
 Taxonomy reference files (`*_taxonomy*`) must be **uncompressed, tab-separated** files with two columns: feature ID and semicolon-delimited taxonomy string. No header row.
 
-**Standard markers (16S, 18S, CO1)** — 7 core levels with `d__` or `k__` prefix notation:
+**Amplicon markers (16S, 18S, CO1)** — 7 core levels with `d__` or `k__` prefix notation:
 ```
 FLASV1.1346	d__Bacteria; p__Actinobacteriota; c__Actinobacteria; o__Propionibacteriales; f__Propionibacteriaceae; g__Cutibacterium; s__Cutibacterium_acnes
 FLASV2.1310	d__Bacteria; p__Proteobacteria; c__Alphaproteobacteria; o__Rhizobiales; f__Xanthobacteraceae; g__Bradyrhizobium; s__MFD_s_2
 FLASV3.1372	d__Bacteria; p__Firmicutes; c__Bacilli; o__Bacillales; f__Bacillaceae; g__Bacillus; s__MFD_s_3
 ```
 
-**ITS (UNITE)** — 7 core levels starting with `k__` plus an optional `sh__` (species hypothesis) rank:
+**ITS (UNITE)** — 7 core levels starting with `k__` plus an optional `sh__` (species hypothesis; added by [UNITE](https://unite.ut.ee/index.php#main)) rank:
 ```
 SH1227328.10FU_MT153946_refs	k__Fungi; p__Ascomycota; c__Dothideomycetes; o__Abrothallales; f__Abrothallaceae; g__Abrothallus; s__Abrothallus_subhalei; sh__SH1227328.10FU
 SH1227742.10FU_JN206177_refs	k__Fungi; p__Mucoromycota; c__Mucoromycetes; o__Mucorales; f__Mucoraceae; g__Mucor; s__Mucor_inaequisporus; sh__SH1227742.10FU
@@ -85,26 +85,16 @@ Optional ranks present: sh__ (e.g. UNITE species hypothesis)
 
 #### Creating deblur reference `.qza` files
 
-The deblur reference databases for non-16S markers must be QIIME2 artifacts (`.qza`). Create them from a plain FASTA file using the standard QIIME2 import command:
+The deblur reference databases for non-16S markers must be QIIME2 artifacts (`.qza`). Create them from a plain FASTA file using the standard [QIIME2](https://docs.qiime2.org/2024.10/tutorials/importing/) import command, for example:
 
 ```bash
 qiime tools import \
     --type 'FeatureData[Sequence]' \
     --input-path  18S_reference.fasta \
     --output-path 18S_deblur_pr2.qza
-
-qiime tools import \
-    --type 'FeatureData[Sequence]' \
-    --input-path  ITS_reference.fasta \
-    --output-path ITS_deblur_UNITE.qza
-
-qiime tools import \
-    --type 'FeatureData[Sequence]' \
-    --input-path  CO1_reference.fasta \
-    --output-path CO1_deblur_MIDORI2.qza
 ```
 
-Place the resulting `.qza` files in the `database/` directory. The filenames must match the `{marker}_deblur*` pattern (e.g. `18S_deblur_pr2.qza`). 16S does not need a deblur reference — QIIME2's `denoise-16S` uses a built-in reference automatically.
+Place the resulting `.qza` files in the `database/` directory. The filenames must match the `{marker}_deblur*` pattern (e.g. `18S_deblur_pr2.qza`). 16S does not need a deblur reference. QIIME2 [q2-deblur](https://library.qiime2.org/plugins/qiime2/q2-deblur/overview) `denoise-16S` uses a built-in reference automatically.
 
 ### Input
 
@@ -118,13 +108,11 @@ Wagtail needs 4 kinds of inputs to work:
    ```
 4. **sample_list** — a plain text file with one accession per line. The accessions must match those in the file_map.
 
-We provide a `create_manifest_wagtail.py` helper script in the `bin/` directory, as well as example data, filemap, and sample list in the `data/` directory.
-
 ### Directories
 
 In the Wagtail directory, you will have several directories:
 1. `bin/` — Python scripts that implement Wagtail functionality
-2. `pipeline/` — the Snakemake file (`wagtail.smk`), `config.yaml`, shared bash helpers (`wagtail_functions.sh`), DAG/rulegraph images, and the `envs/` directory with conda environment definitions
+2. `pipeline/` — the Snakemake file (`wagtail.smk`), `config.yaml`, shared bash helpers (`wagtail_functions.sh`), and the `envs/` directory with conda environment definitions
 3. `test/` — unit tests for Wagtail scripts and test data
 4. `data/` — example input data, filemap, and sample list
 
@@ -523,10 +511,10 @@ Platform\
 :white_check_mark: Local workstations
 
 Database\
-- Tested with bacterial/archaeal 16S (MFD, GreenGenes2), 18S (PR2), ITS (UNITE/QIIME), and CO1 (MIDORI2) databases\
+- Tested with bacterial/archaeal 16S ([MFD](https://zenodo.org/records/17162544), [GreenGenes2](https://greengenes2.ucsd.edu/)), 18S [(PR2)](https://pr2-database.org/), ITS [(UNITE)](https://unite.ut.ee/index.php#main), and CO1 [(MIDORI2)](https://www.reference-midori.info/) databases\
 - Custom databases must be in FASTA format (gzipped or plain)\
 - Filename must match the marker prefix pattern (e.g. `16S_database*`)\
-- No built-in database downloading — manual setup required
+- No built-in database downloading or editing. User should procure and edit manually
 
 ## Code development notice
 

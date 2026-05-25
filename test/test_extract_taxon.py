@@ -13,7 +13,7 @@ sys.path = [os.path.join(os.path.dirname(os.path.realpath(__file__)),'..')] + sy
 #setting the directory path for database and test data
 data_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'test_data')
 
-from bin.extract_taxonomy_danica import extract_taxonomy
+from bin.extract_taxonomy import extract_taxonomy
 
 class TestExtractTaxon(unittest.TestCase):
     
@@ -32,7 +32,7 @@ class TestExtractTaxon(unittest.TestCase):
         input_align = os.path.join(data_dir, 'danica_primary.tsv')
         input_table = os.path.join(data_dir, 'danica_table.tsv')
         sample_accession = 'test_sample'
-        extract_taxonomy(input_align, input_table, sample_accession, self.condensed_output)
+        extract_taxonomy(input_align, input_table, None, sample_accession, self.condensed_output)
         
         # Check if manifest file is created correctly
         expected_output_path = os.path.join(self.output_dir, 'test_sample_condensed.tsv')

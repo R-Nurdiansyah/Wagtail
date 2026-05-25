@@ -9,6 +9,8 @@ Exit codes:
     1  error during alignment or confidence below threshold
 """
 
+from __future__ import annotations
+
 import argparse
 import gc
 import gzip

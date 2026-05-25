@@ -145,6 +145,11 @@ def check_databases(db_dir: str):
                         taxonomy_ok.append(path)
 
     # ── taxonomy format check ─────────────────────────────────────────────────
+    # Import early so any problem with check_db_taxonomy.py is caught immediately,
+    # not only when TSV files happen to be present.
+    sys.path.insert(0, BIN_DIR)
+    from check_db_taxonomy import check_file, summarise   # noqa: E402
+
     # Only run on plain TSV files (not .gz / .fasta / .qza) because
     # check_db_taxonomy.py uses plain open().
     tsv_files = [p for p in taxonomy_ok
@@ -152,8 +157,6 @@ def check_databases(db_dir: str):
 
     if tsv_files:
         print(f"\nValidating taxonomy format ({len(tsv_files)} file(s))...")
-        sys.path.insert(0, BIN_DIR)
-        from check_db_taxonomy import check_file, summarise   # noqa: E402 (local import)
         for path in tsv_files:
             results = check_file(path)
             summarise(results, os.path.basename(path))
