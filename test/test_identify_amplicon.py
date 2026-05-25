@@ -17,12 +17,16 @@ import unittest
 
 sys.path = [os.path.join(os.path.dirname(os.path.realpath(__file__)), "..")] + sys.path
 
-from bin.identify_amplicon import (
-    AlignmentStats,
-    identify_marker,
-    reads_from_filemap,
-    subsample_reads,
-)
+try:
+    from bin.identify_amplicon import (
+        AlignmentStats,
+        identify_marker,
+        reads_from_filemap,
+        subsample_reads,
+    )
+    _MAPPY_AVAILABLE = True
+except ImportError:
+    _MAPPY_AVAILABLE = False
 
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
@@ -51,6 +55,7 @@ def _write_fastq(fh, n_reads, seq_len=150):
 
 # ── reads_from_filemap ────────────────────────────────────────────────────────
 
+@unittest.skipUnless(_MAPPY_AVAILABLE, "mappy not installed in this environment")
 class TestReadsFromFilemap(unittest.TestCase):
 
     def setUp(self):
@@ -96,6 +101,7 @@ class TestReadsFromFilemap(unittest.TestCase):
 
 # ── subsample_reads ───────────────────────────────────────────────────────────
 
+@unittest.skipUnless(_MAPPY_AVAILABLE, "mappy not installed in this environment")
 class TestSubsampleReads(unittest.TestCase):
 
     def setUp(self):
@@ -154,6 +160,7 @@ class TestSubsampleReads(unittest.TestCase):
 
 # ── identify_marker ───────────────────────────────────────────────────────────
 
+@unittest.skipUnless(_MAPPY_AVAILABLE, "mappy not installed in this environment")
 class TestIdentifyMarker(unittest.TestCase):
     """
     Tests for identify_marker() covering:

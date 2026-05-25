@@ -14,8 +14,13 @@ sys.path = [os.path.join(os.path.dirname(os.path.realpath(__file__)),'..')] + sy
 database_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)),'../database')
 data_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)),'test_data')
 
-from bin.mappy_script import process_alignment
+try:
+    from bin.mappy_script import process_alignment
+    _MAPPY_AVAILABLE = True
+except ImportError:
+    _MAPPY_AVAILABLE = False
 
+@unittest.skipUnless(_MAPPY_AVAILABLE, "mappy not installed in this environment")
 class TestMappyAlignment(unittest.TestCase):
     
     def setUp(self):
