@@ -1,11 +1,19 @@
 # Configuration file for Snakemake pipeline
 
-#configurable parameters by user
+# #configurable parameters by user
+
 #run_name for the pipeline
-run_name: "EMP2_test2"
+run_name: ""
 
 #put your list of filenames file here, make sure it is one column with no header and just the accession number
-sample_list: "/home/n11702427/m/users/r_nurdiansyah/wagtail/data/EMP2.tsv"
+sample_list: ""
 
 #put your file map file here make sure it is two column with no header and just the accession number and absolute path to the file
-file_map: "/home/n11702427/m/users/r_nurdiansyah/wagtail/testing/0_data/file_map_EMP2.tsv"
+file_map: ""
+
+# Amplicon type (optional).
+# Leave commented out (or set to "all") to auto-detect per sample using
+# marker_id (recommended for mixed runs).
+# Set to a specific marker to force the entire run to one amplicon type
+# Accepted values: 16S | 18S | ITS | CO1 | all
+#amplicon: "all"

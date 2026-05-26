@@ -24,6 +24,21 @@ filename_list = config["sample_list"]
 filenames     = [line.strip() for line in open(filename_list)]
 run_name      = config["run_name"]
 
+# Amplicon filter ─────────────────────────────────────────────────────────────
+# "all"  (default) — auto-detect per sample via the marker_id checkpoint.
+# "16S" | "18S" | "ITS" | "CO1" — skip identification; treat every sample as
+# that amplicon type. Pass via wagtail.py --amplicon or --config amplicon=ITS.
+_AMPLICON_RAW     = config.get("amplicon", "all")
+FORCED_AMPLICON   = _AMPLICON_RAW.upper()
+_VALID_AMPLICONS  = {"ALL", "16S", "18S", "ITS", "CO1"}
+if FORCED_AMPLICON not in _VALID_AMPLICONS:
+    raise WorkflowError(
+        f"config amplicon={_AMPLICON_RAW!r} is not valid. "
+        f"Accepted values: {', '.join(sorted(_VALID_AMPLICONS - {'ALL'}))} "
+        f"— or omit to auto-detect."
+    )
+AUTO_DETECT = FORCED_AMPLICON == "ALL"   # convenience flag
+
 # ── Timestamp / SQLite ───────────────────────────────────────────────────
 def make_timestamp():
     fmt = "%Y%m%d"
@@ -47,12 +62,23 @@ BASH_LIB = os.path.join(workflow.basedir, "wagtail_functions.sh")
 
 # ── Marker-aware glob helpers ─────────────────────────────────────────────────
 def get_marker(wc):
-    """Read predicted marker from .marker TSV output.
-    Calls checkpoints.marker_id.get() so Snakemake defers DAG construction
-    until the checkpoint has run and the file actually exists.
-    Returns "16S" as a safe fallback when the file is empty or unreadable
-    (e.g. OOM kill) — downstream rules will still soft-fail via SQLite check.
+    """Return the predicted (or forced) amplicon marker for a sample.
+
+    Forced-amplicon mode (--amplicon 16S / 18S / ITS / CO1):
+      Returns FORCED_AMPLICON immediately.  The marker_id checkpoint still
+      runs (writing a trivial marker file) so that the manifest rule's
+      explicit input dependency is satisfied, but no checkpoint DAG edge is
+      created here — downstream rules can be scheduled without waiting.
+
+    Auto-detect mode (default):
+      Calls checkpoints.marker_id.get() so Snakemake defers DAG construction
+      until marker_id has run and written the file.  Falls back to "16S" when
+      the file is empty or unreadable (e.g. OOM kill) — downstream rules will
+      still soft-fail via the SQLite check.
     """
+    if not AUTO_DETECT:
+        return FORCED_AMPLICON
+
     checkpoints.marker_id.get(filename=wc.filename)
     marker_file = f"{run_dir}/{run_name}/0_marker_id/{wc.filename}.marker"
     try:
@@ -89,10 +115,13 @@ def get_tax_ref(wc) -> str:
     marker = get_marker(wc)
     return _resolve(marker, db_dir, pattern=f"{marker}_taxonomy*")
 
-DB_16S = _resolve("16S", db_dir, pattern="16S_database*")
-DB_18S = _resolve("18S", db_dir, pattern="18S_database*")
-DB_ITS = _resolve("ITS", db_dir, pattern="ITS_database*")
-DB_CO1 = _resolve("CO1", db_dir, pattern="CO1_database*")
+# Identification databases are only needed for auto-detection.
+# In forced-amplicon mode these are never passed to identify_amplicon.py,
+# so we skip the resolution step (avoids FileNotFoundError for missing DBs).
+DB_16S = _resolve("16S", db_dir, pattern="16S_database*") if AUTO_DETECT else ""
+DB_18S = _resolve("18S", db_dir, pattern="18S_database*") if AUTO_DETECT else ""
+DB_ITS = _resolve("ITS", db_dir, pattern="ITS_database*") if AUTO_DETECT else ""
+DB_CO1 = _resolve("CO1", db_dir, pattern="CO1_database*") if AUTO_DETECT else ""
 
 # ── rule all ─────────────────────────────────────────────────────────────────
 rule all:
@@ -116,10 +145,11 @@ checkpoint marker_id:
     params:
         script          = f"{script_dir}/identify_amplicon.py",
         sample          = "{filename}",
-        db_16S = DB_16S,
-        db_18S = DB_18S,
-        db_ITS = DB_ITS,
-        db_CO1 = DB_CO1,
+        db_16S          = DB_16S,
+        db_18S          = DB_18S,
+        db_ITS          = DB_ITS,
+        db_CO1          = DB_CO1,
+        forced_amplicon = FORCED_AMPLICON,    # "ALL" → auto-detect; else forced
         sqlite_db       = lambda wc: tmp_db(wc.filename),
         rule_name       = "marker_id",
         tmpdir          = lambda wc: tmp_dir(wc.filename),
@@ -144,6 +174,22 @@ checkpoint marker_id:
         LOGGER={params.logger}
         mkdir -p $(dirname {output.marker}) {params.tmpdir}
 
+        # ── Forced-amplicon fast path ─────────────────────────────────────────
+        # When --amplicon was passed, skip alignment entirely and write the
+        # marker file with the known amplicon type so downstream rules can
+        # proceed immediately.
+        if [[ "{params.forced_amplicon}" != "ALL" ]]; then
+            printf "status\tpredicted_marker\thit_fraction\tmean_identity\tsecond_marker\tsecond_fraction\tsecond_identity\tmargin\n" \
+                > {output.marker}
+            printf "OK\t{params.forced_amplicon}\t1.0\t1.0\tnone\t0.0\t0.0\t1.0\n" \
+                >> {output.marker}
+            echo "Forced amplicon: {params.forced_amplicon}" > {log}
+            wagtail_log_ok {params.sqlite_db} {wildcards.filename} {params.rule_name} {log}
+            wagtail_cleanup {log}
+            exit 0
+        fi
+
+        # ── Auto-detection path (default) ─────────────────────────────────────
         set +e
         python {params.script} \
             --file-map  {input.filemap} \
@@ -838,7 +884,7 @@ rule cleanup:
 
         # Step 2: Clean intermediate directories
         rm -rf {params.tmpdir}
-        #rm -rf {params.target}/[1-3]_* {params.target}/5_*
+        rm -rf {params.target}/[1-5]_*
         touch {output.cleanup_done}
         echo "Cleanup completed" &> {log.cleaning}
 

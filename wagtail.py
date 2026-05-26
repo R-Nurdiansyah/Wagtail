@@ -7,15 +7,21 @@ Usage
 Run the pipeline (all unrecognised flags are forwarded to Snakemake):
     python wagtail.py --use-conda -c 8 --configfile pipeline/config.yaml
 
+Run for a single amplicon only (16S, 18S, ITS, or CO1):
+    python wagtail.py --amplicon 16S --use-conda -c 8 --configfile pipeline/config.yaml
+    python wagtail.py --amplicon ITS --use-conda -c 8 --configfile pipeline/config.yaml
+
 Use GreenGenes2 database variant:
     python wagtail.py --gg2 --use-conda -c 8 --configfile pipeline/config.yaml
 
 Scan database directory for required files and validate taxonomy TSVs:
     python wagtail.py --check-db
+    python wagtail.py --check-db --amplicon ITS
     python wagtail.py --check-db --db-dir /custom/path/to/database
 
 List all database files detected in the database directory:
     python wagtail.py --list-db
+    python wagtail.py --list-db --amplicon CO1
     python wagtail.py --list-db --db-dir /custom/path/to/database
 
 Print Wagtail version:
@@ -71,14 +77,16 @@ def _pop_flag(args: list[str], flag: str, has_value: bool = False):
 
 # ── --list-db ─────────────────────────────────────────────────────────────────
 
-def list_databases(db_dir: str):
+def list_databases(db_dir: str, markers: list[str] = MARKERS):
     """Print a formatted table of all detected database files."""
     col = 16
     print(f"\nDatabase directory: {db_dir}\n")
+    if markers != MARKERS:
+        print(f"  Amplicon filter: {', '.join(markers)}\n")
     print(f"  {'Marker':<8} {'Type':<{col}} {'File'}")
     print(f"  {'-'*6}   {'-'*col}   {'-'*50}")
 
-    for marker in MARKERS:
+    for marker in markers:
         for db_type, suffix, skip_16s, _ in DB_SPECS:
             if marker == "16S" and skip_16s:
                 print(f"  {marker:<8} {db_type:<{col}} (built-in QIIME2 reference)")
@@ -96,7 +104,7 @@ def list_databases(db_dir: str):
 
 # ── --check-db ────────────────────────────────────────────────────────────────
 
-def check_databases(db_dir: str):
+def check_databases(db_dir: str, markers: list[str] = MARKERS):
     """
     1. Verify that every required database file is present (exactly one match
        per pattern).
@@ -104,12 +112,14 @@ def check_databases(db_dir: str):
     Exits 0 on pass, 1 on any issue.
     """
     print(f"\nChecking databases in: {db_dir}\n")
+    if markers != MARKERS:
+        print(f"  Amplicon filter: {', '.join(markers)}\n")
 
     problems    = []
     taxonomy_ok = []   # paths of taxonomy TSVs that passed presence check
 
     # ── presence / uniqueness check ───────────────────────────────────────────
-    for marker in MARKERS:
+    for marker in markers:
         marker_ok = True
         for db_type, suffix, skip_16s, description in DB_SPECS:
             if marker == "16S" and skip_16s:
@@ -219,14 +229,30 @@ def main():
     # --db-dir (shared by --check-db and --list-db; consumed before dispatch)
     db_dir = _pop_flag(args, "--db-dir", has_value=True) or DB_DIR
 
+    # --amplicon (optional; restrict to a single marker)
+    amplicon_raw = _pop_flag(args, "--amplicon", has_value=True)
+    if amplicon_raw is not None:
+        amplicon = amplicon_raw.upper()
+        if amplicon not in MARKERS:
+            print(
+                f"Unknown amplicon {amplicon_raw!r}. "
+                f"Choose from: {', '.join(MARKERS)}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        active_markers = [amplicon]
+    else:
+        amplicon       = None
+        active_markers = MARKERS
+
     # --check-db
     if _pop_flag(args, "--check-db"):
-        check_databases(db_dir)
+        check_databases(db_dir, markers=active_markers)
         return   # check_databases calls sys.exit
 
     # --list-db
     if _pop_flag(args, "--list-db"):
-        list_databases(db_dir)
+        list_databases(db_dir, markers=active_markers)
         return   # list_databases calls sys.exit
 
     # --gg2 (pass-through to pipeline; remove the flag itself before snakemake)
@@ -235,6 +261,12 @@ def main():
     for alias in ("--greengenes", "--greengenes2", "--green_genes"):
         if _pop_flag(args, alias):
             use_gg2 = True
+
+    # Inject amplicon restriction into Snakemake config so the pipeline only
+    # processes the requested marker.  The Snakemake file reads this via
+    # config.get("amplicon", "all").
+    if amplicon:
+        args += ["--config", f"amplicon={amplicon}"]
 
     run_pipeline(args, use_gg2=use_gg2)
 

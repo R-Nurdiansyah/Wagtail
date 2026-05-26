@@ -209,6 +209,9 @@ sample001
 sample002
 ```
 
+[!WARNING]
+deblur cannot work with sample name with underscores, make sure to avoid underscores in the sample name
+
 **STEP 2: CONFIGURE**
 
 Edit `pipeline/config.yaml`:
@@ -256,9 +259,9 @@ If it is the first time you execute Wagtail, Snakemake will create the conda env
 - Want to process samples in manageable chunks
 - Assuming that you have an HPC (e.g. QUT Aqua) environment
 
-**STEP 1: PREPARE ACCESSION LIST**
+**STEP 1: PREPARE SAMPLE NAME/ACCESSION LIST**
 
-Create a text file with one accession per line:
+Create a text file with one sample name/accession per line:
 ```
 SRR12345678
 SRR12345679
