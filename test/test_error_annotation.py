@@ -28,11 +28,11 @@ class TestErrorAnnotation(unittest.TestCase):
 
     def test_quality_control_filtered_out_hint(self):
         output = self._run_script('log_quality_control.txt', 'quality_control')
-        self.assertIn('Sample may not 16S', output)
+        self.assertIn('Sample read count too low or bad quality. Please check the sample', output)
 
     def test_deblur_empty_sequence_hint(self):
         output = self._run_script('log_deblur.txt', 'deblur')
-        self.assertIn('Sample may not 16S', output)
+        self.assertIn('Sample may not same marker as identified. Please check the sample', output)
 
     def test_upstream_failure_silently_exits(self):
         output = self._run_script('log_upstream.txt', 'mappy')
