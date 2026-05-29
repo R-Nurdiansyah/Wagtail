@@ -166,7 +166,7 @@ checkpoint marker_id:
         f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/marker_id.benchmark.log"
     threads: 1
     resources:
-        mem_mb  = 24000,
+        mem_mb  = 320 if not AUTO_DETECT else 8000,  # default to 8GB for auto-detect since alignment can be large; 320MB is enough for the fast path
         runtime = "1h"
     shell:
         r"""

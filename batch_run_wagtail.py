@@ -307,10 +307,10 @@ def run_batch(batch_num, batch_data):
     else:
         # Cluster execution mode (mqsub)
         wagtail_cmd = _base_cmd + [
-            "--jobs", "100",
+            "--jobs", "50",
             "--local-cores", str(request_cores),
             "--cores", str(request_cores * 4),
-            "--group-components", "wagtail=128",
+            "--group-components", "wagtail=50",
         ]
 
         cmd = [

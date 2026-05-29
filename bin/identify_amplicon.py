@@ -37,18 +37,20 @@ def parse_args():
     p.add_argument("--output",          required=True, help="Path to write predicted marker name")
     p.add_argument("--n-subsample",     type=int, default=1000,
                    help="Number of reads to subsample (default: 1000)")
-    p.add_argument("--min-confidence",  type=float, default=0.6,
-                   help="Min hit fraction for a confident call (default: 0.6)")
+    p.add_argument("--min-confidence",  type=float, default=0.5,
+                   help="Min combined score (hit_fraction × mean_identity) for a confident call "
+                        "(default: 0.5)")
     p.add_argument("--preset",          default="sr",
                    help="Minimap2 preset: 'sr' for short reads")
     p.add_argument("--seed",            type=int, default=42,
                    help="Random seed for subsampling (default: 42)")
-    p.add_argument("--min-identity",   type=float, default=0.90,
-                   help="Minimum sequence identity for a read to count as a hit (default: 0.90)")
-    p.add_argument("--min-aln-length", type=int, default=50,
-                   help="Minimum alignment length for a read to count as a hit (default: 50)")
+    p.add_argument("--min-identity",   type=float, default=0.50,
+                   help="Minimum sequence identity for a read to count as a hit (default: 0.50)")
+    p.add_argument("--min-aln-length", type=int, default=25,
+                   help="Minimum alignment length for a read to count as a hit (default: 25)")
     p.add_argument("--min-margin",     type=float, default=0.05,
-                   help="Minimum mean identity margin between best and second-best hit for an unambiguous call (default: 0.05)")
+                   help="Minimum combined-score margin between best and second-best marker "
+                        "for an unambiguous call (default: 0.05)")
     p.add_argument("--min-16s-fraction", type=float, default=0.90,
                    help="If 16S hit fraction meets this threshold, always call 16S "
                         "(overrides ranking; guards against 16S/18S cross-homology). "
@@ -179,25 +181,27 @@ def identify_marker(
     min_16s_fraction: float,
 ) -> tuple[str, str, AlignmentStats, AlignmentStats | None]:
     """
-    Primary metric:   mean % identity across valid hits
-    Secondary metric: hit fraction (used for min_confidence gate only)
+    Primary metric:   combined score = hit_fraction × mean_identity
+    Tiebreaker:       hit_fraction
 
-    Rationale: spurious cross-hits (e.g. 16S reads hitting 18S database)
-    align at systematically lower identity than genuine hits even when hit
-    fraction is high, so mean identity separates them more cleanly.
+    Rationale: mean_identity alone is misleading when two markers have
+    different numbers of hits — you'd be comparing means over different read
+    populations.  The combined score is analogous to BLAST (query_coverage ×
+    identity): a marker that aligns 60 % of reads at 94.8 % identity scores
+    0.569, clearly beating one that aligns only 13 % at 96.5 % (0.126).
 
     Priority rule: if 16S hit fraction >= min_16s_fraction, call 16S
     unconditionally.  16S and 18S share enough SSU homology that 16S reads
     routinely align to 18S at nearly identical identity; a strong 16S hit
-    fraction is a more reliable discriminator than a tiny identity margin.
+    fraction is a more reliable discriminator.
 
     Returns: (status, predicted_marker, best_stats, second_stats)
       status: "OK" | "AMBIGUOUS" | "UNKNOWN"
     """
-    # Sort by mean identity descending; break ties by hit fraction
+    # Sort by combined score descending; break ties by hit fraction
     ranked = sorted(
         stats.values(),
-        key=lambda s: (s.mean_identity, s.hit_fraction),
+        key=lambda s: (s.hit_fraction * s.mean_identity, s.hit_fraction),
         reverse=True,
     )
     best   = ranked[0]
@@ -206,7 +210,7 @@ def identify_marker(
     # ── 16S priority rule ────────────────────────────────────────────────────
     # If 16S hit fraction is high, short-circuit to 16S regardless of ranking.
     # This guards against the 16S/18S cross-homology scenario where 18S edges
-    # out 16S by a fraction of a percent of mean identity.
+    # out 16S by a fraction of a percent.
     sixteen_s = stats.get("16S")
     if sixteen_s and sixteen_s.hit_fraction >= min_16s_fraction:
         non_16s = next((s for s in ranked if s.marker != "16S"), None)
@@ -217,14 +221,15 @@ def identify_marker(
         return "OK", "16S", sixteen_s, non_16s
 
     # ── Standard ranking gates ────────────────────────────────────────────────
-    second_identity = second.mean_identity if second else 0.0
-    margin = round(best.mean_identity - second_identity, 4)
+    best_score   = best.hit_fraction * best.mean_identity
+    second_score = (second.hit_fraction * second.mean_identity) if second else 0.0
+    margin       = round(best_score - second_score, 4)
 
-    # Gate 1: best hit fraction must exceed min_confidence
-    if best.hit_fraction < min_confidence:
+    # Gate 1: best combined score must exceed min_confidence
+    if best_score < min_confidence:
         return "UNKNOWN", best.marker, best, second
 
-    # Gate 2: best must be clearly better than second by mean identity
+    # Gate 2: best combined score must be clearly better than second
     if margin < min_margin:
         return "AMBIGUOUS", best.marker, best, second
 
@@ -298,7 +303,6 @@ def main():
             )
             break
 
-    # 3. Pick winner
     # 3. Identify marker
     status, predicted, best, second = identify_marker(
         stats, args.min_confidence, args.min_margin, args.min_16s_fraction
@@ -306,31 +310,38 @@ def main():
  
     logging.info(f"Status:    {status}")
     logging.info(f"Predicted: {predicted}")
+
+    best_score   = best.hit_fraction * best.mean_identity
+    second_score = (second.hit_fraction * second.mean_identity) if second else 0.0
+
     logging.info(
         f"  → Best:        {best.marker}  "
+        f"score={best_score:.4f}  "
         f"mean_id={best.mean_identity:.4f}  "
         f"hit_frac={best.hit_fraction:.3f}"
     )
     if second:
         logging.info(
             f"  → Second-best: {second.marker}  "
+            f"score={second_score:.4f}  "
             f"mean_id={second.mean_identity:.4f}  "
             f"hit_frac={second.hit_fraction:.3f}"
         )
- 
+
     if status == "AMBIGUOUS":
         logging.warning(
             f"Marker ambiguous between best ({best.marker} "
-            f"mean_id={best.mean_identity:.4f}) and second-best "
-            f"({second.marker} mean_id={second.mean_identity:.4f}); "
-            f"identity margin {best.mean_identity - second.mean_identity:.4f} "
+            f"score={best_score:.4f}) and second-best "
+            f"({second.marker} score={second_score:.4f}); "
+            f"score margin {best_score - second_score:.4f} "
             f"is below threshold {args.min_margin}"
         )
     elif status == "UNKNOWN":
         logging.warning(
             f"Amplicon is not 16S, 18S, ITS, or CO1 — "
-            f"best hit fraction {best.hit_fraction:.3f} is below "
-            f"confidence threshold {args.min_confidence}"
+            f"best combined score {best_score:.4f} "
+            f"(hit_frac={best.hit_fraction:.3f} × mean_id={best.mean_identity:.4f}) "
+            f"is below confidence threshold {args.min_confidence}"
         )
  
     # 4. Write TSV — 8 columns
@@ -339,29 +350,34 @@ def main():
     second_marker    = second.marker                        if second else "None"
     second_mean_id   = f"{second.mean_identity:.4f}"       if second else "NA"
     second_hit_frac  = f"{second.hit_fraction:.3f}"        if second else "NA"
-    identity_margin  = best.mean_identity - (second.mean_identity if second else 0.0)
- 
+    second_score_str = f"{second_score:.4f}"               if second else "NA"
+    score_margin     = best_score - second_score
+
     with open(args.output, "w", newline="") as fh:
         writer = csv.writer(fh, delimiter="\t")
         writer.writerow([
             "status",
             "predicted_marker",
+            "best_combined_score",
             "best_mean_identity",
             "best_hit_fraction",
             "second_marker",
+            "second_combined_score",
             "second_mean_identity",
             "second_hit_fraction",
-            "identity_margin",
+            "score_margin",
         ])
         writer.writerow([
             status,
             predicted,
+            f"{best_score:.4f}",
             f"{best.mean_identity:.4f}",
             f"{best.hit_fraction:.3f}",
             second_marker,
+            second_score_str,
             second_mean_id,
             second_hit_frac,
-            f"{identity_margin:.4f}",
+            f"{score_margin:.4f}",
         ])
  
     logging.info(f"Written to {args.output}")

@@ -171,7 +171,7 @@ class TestIdentifyMarker(unittest.TestCase):
       - Correct second-best reporting
     """
 
-    CONF   = 0.60   # min_confidence
+    CONF   = 0.50   # min_confidence
     MARGIN = 0.05   # min_margin
     FRAC   = 0.90   # min_16s_fraction
 
@@ -232,7 +232,7 @@ class TestIdentifyMarker(unittest.TestCase):
         ]
         _, _, _, second = self._call(stats)
         self.assertIsNotNone(second)
-        self.assertEqual(second.marker, "18S")   # highest non-16S by mean identity
+        self.assertEqual(second.marker, "18S")   # highest non-16S by combined score
 
     # ── UNKNOWN gate ──────────────────────────────────────────────────────────
 
@@ -250,10 +250,11 @@ class TestIdentifyMarker(unittest.TestCase):
     # ── AMBIGUOUS gate ────────────────────────────────────────────────────────
 
     def test_ambiguous_when_margin_too_small(self):
-        """Two markers with near-identical mean identity → AMBIGUOUS."""
+        """Two markers with near-identical combined scores → AMBIGUOUS.
+        ITS: 0.90×0.9500=0.8550, 18S: 0.88×0.9490=0.8351 → margin 0.0199 < 0.05"""
         stats = [
             _make_stats("ITS", hit_fraction=0.90, mean_identity=0.9500),
-            _make_stats("18S", hit_fraction=0.88, mean_identity=0.9490),  # margin 0.001 < 0.05
+            _make_stats("18S", hit_fraction=0.88, mean_identity=0.9490),
             _make_stats("16S", hit_fraction=0.05, mean_identity=0.80),
             _make_stats("CO1", hit_fraction=0.00, mean_identity=0.0),
         ]
@@ -261,10 +262,11 @@ class TestIdentifyMarker(unittest.TestCase):
         self.assertEqual(status, "AMBIGUOUS")
 
     def test_ok_when_margin_equals_threshold(self):
-        """Margin exactly equal to min_margin is NOT ambiguous (>= threshold)."""
+        """Combined-score margin exactly equal to min_margin is NOT ambiguous (>= threshold).
+        ITS: 1.00×0.900=0.900, 18S: 1.00×0.850=0.850 → margin exactly 0.05"""
         stats = [
-            _make_stats("ITS", hit_fraction=0.90, mean_identity=0.9500),
-            _make_stats("18S", hit_fraction=0.88, mean_identity=0.9000),  # margin = 0.05
+            _make_stats("ITS", hit_fraction=1.00, mean_identity=0.9000),
+            _make_stats("18S", hit_fraction=1.00, mean_identity=0.8500),  # score margin = 0.05
             _make_stats("16S", hit_fraction=0.05, mean_identity=0.80),
             _make_stats("CO1", hit_fraction=0.00, mean_identity=0.0),
         ]
