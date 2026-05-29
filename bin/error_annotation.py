@@ -20,14 +20,14 @@ if rule_name == "mappy":
         print("Check STDERR in log")
 elif rule_name == "quality_control":
     if "All sequences from all samples were filtered out." in log:
-        print("Sample may not 16S or read count too low or bad quality or adapter present. Please check the sample")
+        print("Sample read count too low or bad quality. Please check the sample")
     else:
         print("Check STDERR in log")
 elif rule_name == "deblur":
     if "max() arg is an empty sequence" in log or "Command '['deblur', 'workflow'," in log:
-        print("Sample may not 16S. Please check the sample")
+        print("Sample may not same marker as identified. Please check the sample")
     elif "No sequences passed the filter. It is possible the trim_length" in log:
-        print("Sample may not 16S or read length too short or adapter present in sample. Please check the sample")
+        print("Sample read length is too short. Please check the sample")
     else:
         print("Check STDERR in log")
 else:

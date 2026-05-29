@@ -29,6 +29,12 @@ parser.add_argument("--wait-time", type=int, default=30, help="Time to wait betw
 parser.add_argument("--execution-mode", choices=["local", "cluster"], default="local", help="Execution mode: 'local' for local execution, 'cluster' for mqsub (default: cluster).")
 parser.add_argument("--randomize", action="store_true", help="Randomize accessions before batching to balance sample sizes (only for CSV input mode).")
 parser.add_argument("--random-seed", type=int, default=None, help="Random seed for reproducible randomization.")
+parser.add_argument("--amplicon", choices=["16S", "18S", "ITS", "CO1"], default=None,
+                    help="Force all batches to a specific amplicon type, skipping auto-detection. "
+                         "Omit to auto-detect per sample (default).")
+parser.add_argument("--conda-prefix", default=None,
+                    help="Path to the shared conda environment prefix directory "
+                         "(passed to Snakemake as --conda-prefix).")
 args = parser.parse_args()
 
 # === Config ===
@@ -54,13 +60,52 @@ request_mem = args.request_mem
 request_hours = args.request_hours
 wait_time = args.wait_time
 execution_mode = args.execution_mode
+amplicon = args.amplicon           # None → auto-detect; "16S"/"18S"/"ITS"/"CO1" → forced
+conda_prefix = args.conda_prefix   # None → Snakemake default
+
+# === Early validation =========================================================
+if os.path.isdir(log_file):
+    raise ValueError(f"--log_file must be a file path, not a directory: {log_file}")
+if input_mode == "csv" and not os.path.exists(acc_list_file):
+    raise ValueError(f"Accession list file not found: {acc_list_file}")
+if input_mode == "directory" and not os.path.exists(input_dir):
+    raise ValueError(f"Input directory not found: {input_dir}")
+if not os.path.exists(constant_filemap):
+    raise ValueError(f"File map not found: {constant_filemap}")
+if not os.path.exists(pipeline):
+    raise ValueError(f"Pipeline script not found: {pipeline}")
 
 print(f"Input mode: {input_mode.upper()}")
 print(f"Execution mode: {execution_mode.upper()}")
+if amplicon:
+    print(f"Amplicon filter: {amplicon} (forced)")
+else:
+    print("Amplicon: auto-detect per sample")
 if execution_mode == "local":
     print("Running batches locally for testing...")
 else:
     print("Running batches on cluster using mqsub...")
+
+# Write log header now that validation has passed
+with open(log_file, "a") as logf:
+    logf.write(f"\n[{datetime.now().isoformat()}] === Starting batch Wagtail processing ===\n")
+    logf.write(f"Input mode: {input_mode.upper()}\n")
+    logf.write(f"Execution mode: {execution_mode.upper()}\n")
+    logf.write(f"Amplicon: {amplicon if amplicon else 'auto-detect'}\n")
+    if conda_prefix:
+        logf.write(f"Conda prefix: {conda_prefix}\n")
+    if input_mode == "csv":
+        logf.write(f"Accession list: {acc_list_file}\n")
+        logf.write(f"Batch size: {batch_size}\n")
+        logf.write(f"Randomize: {args.randomize}\n")
+        if args.randomize and args.random_seed:
+            logf.write(f"Random seed: {args.random_seed}\n")
+    else:
+        logf.write(f"Input directory: {input_dir}\n")
+    logf.write(f"Output directory: {output_dir}\n")
+    logf.write(f"Pipeline: {pipeline}\n")
+    if execution_mode == "cluster":
+        logf.write(f"Cluster resources: {request_cores} cores, {request_mem}GB RAM, {request_hours}h\n")
 
 # === Step 1: Process input based on mode ===
 if input_mode == "csv":
@@ -194,25 +239,35 @@ def run_batch(batch_num, batch_data):
             cf.write(f"run_name: {run_name_prefix}_batch_{batch_str}\n")
             cf.write(f"sample_list: {batch_acc_filename}\n")
             cf.write(f"file_map: {constant_filemap}\n")
+            if amplicon:
+                cf.write(f"amplicon: {amplicon}\n")
     
     # Log that the batch is starting
     with open(log_file, "a") as logf:
         logf.write(f"[{datetime.now().isoformat()}] Batch {batch_str} STARTED: {len(batch_accs)} accessions, config: {config_filename}\n")
 
+    # Build the base wagtail command shared by both execution modes.
+    # amplicon is written to the config file above, so Snakemake picks it up
+    # via config.get("amplicon", "all") without needing an extra CLI flag.
+    _base_cmd = [
+        "python", pipeline,
+        "--profile", "aqua",
+        "--configfile", config_filename,
+        "--keep-going",
+        "--conda-frontend", "conda",
+        "--rerun-incomplete",
+        "--use-conda",
+    ]
+    if conda_prefix:
+        _base_cmd += ["--conda-prefix", conda_prefix]
+
     if execution_mode == "local":
         # Local execution mode
-        wagtail_cmd = [
-            "python", pipeline,
-            "--profile", "aqua",
-            "--configfile", config_filename,
-            "--keep-going",
-            "--conda-frontend", "conda",
+        wagtail_cmd = _base_cmd + [
             "--jobs", "50",
-            "--rerun-incomplete",
             "--local-cores", str(request_cores),
             "--cores", str(request_cores * 4),
-            "--use-conda",
-            "--group-components", "wagtail=160"
+            "--group-components", "wagtail=160",
         ]
         
         # Write a checkpoint file before running
@@ -251,18 +306,11 @@ def run_batch(batch_num, batch_data):
 
     else:
         # Cluster execution mode (mqsub)
-        wagtail_cmd = [
-            "python", pipeline,
-            "--profile", "aqua",
-            "--configfile", config_filename,
-            "--keep-going",
-            "--conda-frontend", "conda",
+        wagtail_cmd = _base_cmd + [
             "--jobs", "100",
-            "--rerun-incomplete",
             "--local-cores", str(request_cores),
             "--cores", str(request_cores * 4),
-            "--use-conda",
-            "--group-components", "wagtail=128"
+            "--group-components", "wagtail=128",
         ]
 
         cmd = [
@@ -309,7 +357,7 @@ def run_batch(batch_num, batch_data):
                 while not job_completed:
                     # Check for completion indicators (adjust based on your pipeline outputs)
                     # For Wagtail, you might check for specific output files or directories
-                    run_dir = os.path.join(output_dir, f"run/real_soil_marine_2_batch_{batch_str}")
+                    run_dir = os.path.join(output_dir, f"run/{run_name_prefix}_batch_{batch_str}")
                     if os.path.exists(run_dir):
                         # Check for condensed.tsv files or other completion indicators
                         condensed_files = glob.glob(os.path.join(run_dir, "*_condensed.tsv"))
@@ -445,39 +493,5 @@ else:
 
 print("\nAll batches processing completed.")
 
-if __name__ == "__main__":
-    # Check that log_file is not a directory
-    if os.path.isdir(log_file):
-        raise ValueError(f"--log_file argument must be a file path, not a directory: {log_file}")
-    
-    # Validate input files exist
-    if input_mode == "csv" and not os.path.exists(acc_list_file):
-        raise ValueError(f"Accession list file not found: {acc_list_file}")
-    if input_mode == "directory" and not os.path.exists(input_dir):
-        raise ValueError(f"Input directory not found: {input_dir}")
-    if not os.path.exists(constant_filemap):
-        raise ValueError(f"File map not found: {constant_filemap}")
-    if not os.path.exists(pipeline):
-        raise ValueError(f"Pipeline script not found: {pipeline}")
-    
-    # Create log file and write header
-    with open(log_file, "a") as logf:
-        logf.write(f"\n[{datetime.now().isoformat()}] === Starting batch Wagtail processing ===\n")
-        logf.write(f"Input mode: {input_mode.upper()}\n")
-        logf.write(f"Execution mode: {execution_mode.upper()}\n")
-        if input_mode == "csv":
-            logf.write(f"Accession list: {acc_list_file}\n")
-            logf.write(f"Batch size: {batch_size}\n")
-            logf.write(f"Randomize: {args.randomize}\n")
-            if args.randomize and args.random_seed:
-                logf.write(f"Random seed: {args.random_seed}\n")
-        else:
-            logf.write(f"Input directory: {input_dir}\n")
-        logf.write(f"Total batches: {total_batches}\n")
-        logf.write(f"Output directory: {output_dir}\n")
-        logf.write(f"Pipeline: {pipeline}\n")
-        if execution_mode == "cluster":
-            logf.write(f"Cluster resources: {request_cores} cores, {request_mem}GB RAM, {request_hours}h\n")
-    
-    print("Batch Wagtail processing finished.")
-    print(f"Check log file for details: {log_file}")
+print("\nAll batches processing completed.")
+print(f"Check log file for details: {log_file}")
