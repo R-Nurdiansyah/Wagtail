@@ -6,6 +6,7 @@ import concurrent.futures
 import argparse
 import glob
 import random
+import re
 import time
 from datetime import datetime
 
@@ -254,7 +255,7 @@ def run_batch(batch_num, batch_data):
         "--profile", "aqua",
         "--configfile", config_filename,
         "--keep-going",
-        "--conda-frontend", "conda",
+        "--conda-frontend", "mamba",
         "--rerun-incomplete",
         "--use-conda",
     ]
@@ -311,6 +312,7 @@ def run_batch(batch_num, batch_data):
             "--local-cores", str(request_cores),
             "--cores", str(request_cores * 4),
             "--group-components", "wagtail=50",
+            "--retries", "3",
         ]
 
         cmd = [
@@ -343,55 +345,35 @@ def run_batch(batch_num, batch_data):
                 status_file.write(f"MQSUB_EXITCODE={result.returncode}\n")
             
             if result.returncode == 0:
-                # Job submitted successfully
-                with open(log_file, "a") as logf:
-                    logf.write(f"[{datetime.now().isoformat()}] Batch {batch_str} SUBMITTED TO CLUSTER\n")
-                
-                print(f"Batch {batch_str} submitted to cluster, waiting for completion...")
-                
-                # For cluster mode, we need to wait for the job to complete
-                # Check for completion by looking for specific output indicators
-                job_completed = False
-                wait_start_time = time.time()
-                
-                while not job_completed:
-                    # Check for completion indicators (adjust based on your pipeline outputs)
-                    # For Wagtail, you might check for specific output files or directories
-                    run_dir = os.path.join(output_dir, f"run/{run_name_prefix}_batch_{batch_str}")
-                    if os.path.exists(run_dir):
-                        # Check for condensed.tsv files or other completion indicators
-                        condensed_files = glob.glob(os.path.join(run_dir, "*_condensed.tsv"))
-                        if condensed_files and len(condensed_files) > 0:
-                            # Check if files have content
-                            valid_files = 0
-                            for f in condensed_files[:5]:  # Check first few files
-                                try:
-                                    if os.path.getsize(f) > 0:
-                                        valid_files += 1
-                                except:
-                                    pass
-                            
-                            if valid_files > 0:
-                                job_completed = True
-                                status = "COMPLETED successfully"
-                                with open(run_status_filename, "a") as status_file:
-                                    status_file.write(f"COMPLETED\nEXITCODE=0\n")
-                                print(f"Batch {batch_str} finished, running next batch...")
-                                break
-                    
-                    # Wait before checking again
-                    time.sleep(wait_time)
-                    
-                    # Add timeout
-                    elapsed_time = time.time() - wait_start_time
-                    if elapsed_time > (request_hours * 3600):
-                        status = "TIMEOUT - job exceeded requested time limit"
-                        with open(run_status_filename, "a") as status_file:
-                            status_file.write(f"TIMEOUT\nEXITCODE=1\n")
+                # Job submitted successfully — parse the job ID from mqsub stdout
+                # so we can poll qstat instead of guessing at output files.
+                job_id = None
+                for line in result.stdout.splitlines():
+                    m = re.search(r'\b(\d{4,})\b', line)  # job IDs are typically 4+ digits
+                    if m:
+                        job_id = m.group(1)
                         break
-                
-                if not job_completed and "TIMEOUT" not in status:
-                    status = "SUBMITTED successfully - job running on cluster"
+
+                with open(log_file, "a") as logf:
+                    logf.write(f"[{datetime.now().isoformat()}] Batch {batch_str} SUBMITTED TO CLUSTER"
+                               f"{' job_id=' + job_id if job_id else ''}\n")
+
+                if job_id:
+                    print(f"Batch {batch_str} submitted (job {job_id}), waiting for completion...")
+                    wait_for_job(job_id, batch_str, wait_time)
+                    status = "COMPLETED (cluster job left queue)"
+                    with open(run_status_filename, "a") as status_file:
+                        status_file.write(f"COMPLETED\nEXITCODE=0\n")
+                else:
+                    # mqsub output did not contain a parseable job ID —
+                    # fall back to a simple timed wait, then move on.
+                    print(f"Batch {batch_str} submitted (no job ID parsed from mqsub output); "
+                          f"waiting {wait_time}s then continuing...")
+                    with open(log_file, "a") as logf:
+                        logf.write(f"[{datetime.now().isoformat()}] Batch {batch_str} WARNING: "
+                                   f"could not parse job ID from mqsub stdout: {result.stdout!r}\n")
+                    time.sleep(wait_time)
+                    status = "SUBMITTED (job ID unknown — not waited)"
                     with open(run_status_filename, "a") as status_file:
                         status_file.write(f"SUBMITTED\nEXITCODE=0\n")
             else:

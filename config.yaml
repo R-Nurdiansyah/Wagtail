@@ -3,13 +3,13 @@
 # #configurable parameters by user
 
 #run_name for the pipeline
-run_name: ""
+run_name: "test_zymo"
 
 #put your list of filenames file here, make sure it is one column with no header and just the accession number
-sample_list: ""
+sample_list: "data/zymo.txt"
 
 #put your file map file here make sure it is two column with no header and just the accession number and absolute path to the file
-file_map: ""
+file_map: "data/zymo_file_map.txt"
 
 # Amplicon type (optional).
 # Leave commented out (or set to "all") to auto-detect per sample using

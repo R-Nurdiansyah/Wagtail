@@ -1,9 +1,9 @@
 ![Wagtail Logo](https://github.com/R-Nurdiansyah/Wagtail/blob/development/wagtail_logo_(29-7-2024).png?raw=true)
 
 # Wagtail
-_Version 0.15_
+_Version 1.1_
 
-Wagtail is an accurate and scalable tool to analyze amplicon sequencing datasets with easy-to-swap reference databases. As of version 0.15, Wagtail supports **16S, 18S, ITS, and CO1** amplicon sequences sequenced from the Illumina platform.\
+Wagtail is an accurate and scalable tool to analyze amplicon sequencing datasets with easy-to-swap reference databases. As of version 1.1, Wagtail supports **16S, 18S, ITS, and CO1** amplicon sequences sequenced from the Illumina platform.\
 The tool is a combination of Qiime 2 [Deblur](https://library.qiime2.org/plugins/qiime2/q2-deblur/overview) plugin for quality control and [Minimap2](https://github.com/lh3/minimap2) aligner to align representative sequences from Deblur. The result is a taxonomy profile in the format of condensed and running metadata. The combination is weaved using [Snakemake](https://snakemake.github.io/) to allow easy reproducibility, benchmarking, and packaging.\
 [Minimap2](https://github.com/lh3/minimap2), in the form of its Python interface (Mappy), is chosen for its versatility in using reference databases without or with minor modification. Users only need to provide the database in FASTA format, or use the Minimap2 index format for faster loading (optional).
 
@@ -125,29 +125,28 @@ Users should create the following empty directories before the first run:
 The pipeline runs the following steps in order for each sample:
 
 ```
-marker_id → manifest → qiime2_import → quality_control → deblur
-                                                            ↓
-                                            export_seqs   export_and_edit_table
-                                                ↓                  ↓
-                                             mappy          (BIOM → TSV)
-                                                ↓
-                                        extract_taxonomy
-                                                ↓
-                                       qiime_stats  metadata_creation
-                                                          ↓
-                                                       cleanup
+marker_id → manifest → import_and_qc → deblur
+                                           ↓
+                              ┌────────────┴──────────────┐
+                           export_all                 qiime_stats
+                           ↙         ↘                    ↓
+                        mappy     (table_edit)    metadata_creation
+                          ↓            ↓          ↑
+                     extract_taxonomy ─┘          │
+                              ↓                   │ (mappy metadata)
+                              └───────────────────┘
+                                       ↓
+                                    cleanup
 ```
 
 | Step | Description |
 |------|-------------|
-| `marker_id` | Sub-samples 1,000 reads and competitively aligns against all four databases to identify the amplicon type. Soft-fails if the marker is ambiguous or unrecognised. |
+| `marker_id` | Sub-samples 1,000 reads and competitively aligns against all four databases to identify the amplicon type. Runs as a standalone job before the main pipeline group. Soft-fails if the marker is ambiguous or unrecognised. |
 | `manifest` | Creates a QIIME2-format sample manifest from the file_map. |
-| `qiime2_import` | Imports the raw FASTQ into a QIIME2 artifact. |
-| `quality_control` | Quality filters reads using `qiime quality-filter q-score`. |
-| `deblur` | Denoises reads: `denoise-16S` for 16S samples (uses QIIME2's built-in reference), `denoise-other` with an explicit reference for 18S / ITS / CO1. |
-| `export_seqs` | Exports representative ASV sequences as FASTA. |
+| `import_and_qc` | Imports the raw FASTQ into a QIIME2 artifact, then immediately quality-filters reads using `qiime quality-filter q-score`. The intermediate import artifact is kept in scratch space and never written to shared storage. |
+| `deblur` | Denoises reads: `denoise-16S` for 16S samples (uses QIIME2's built-in reference), `denoise-other` with an explicit reference for 18S / ITS / CO1. Wall-time scales automatically with retries (4 h → 8 h → 12 h). |
+| `export_all` | Exports representative ASV sequences as FASTA **and** exports the BIOM frequency table to TSV in a single job, eliminating one scheduler round-trip per sample. |
 | `mappy` | Aligns representative sequences to the marker-specific taxonomy database. |
-| `export_and_edit_table` | Exports the BIOM frequency table to TSV and strips the header lines. |
 | `extract_taxonomy` | Combines alignment and frequency table into a condensed taxonomy profile. |
 | `qiime_stats` | Extracts QC and deblur statistics from QIIME2 artifacts. |
 | `metadata_creation` | Combines QC, deblur, and alignment metadata into a per-sample TSV. |
@@ -162,10 +161,10 @@ run/run_name/
 ├── 0_logs_wagtail/             # Execution logs, benchmarks, and SQLite logs
 │   └── {sample}/
 │       ├── marker_id.log
+│       ├── import_and_qc.log
 │       ├── deblur.log
+│       ├── export_all.log
 │       └── *.benchmark.log
-├── 0_marker_id/                # Marker identification results (NEW in v0.15)
-│   └── {sample}.marker         # TSV: status, predicted_marker, identities, margin
 ├── 6_condensed_wagtail/        # Taxonomy profiles per sample
 │   └── {sample}_condensed.tsv
 ├── 7_metadata/                 # Sample metadata
@@ -175,10 +174,9 @@ run/run_name/
 └── {run_name}_YYYYMMDD_log.sql        # SQLite execution log
 ```
 
-Intermediate directories (`1_import_wagtail/` through `5_taxonomy_wagtail/`) are cleaned up after the pipeline completes.
+Intermediate directories (`1_manifest/` through `5_taxonomy_wagtail/`) are cleaned up after the pipeline completes. The intermediate QIIME2 import artifact (previously `1_import_wagtail/`) is now written to per-sample scratch space (`TMPDIR`) and is never materialised on shared storage.
 
 ### Key output files
-- `{sample}.marker` — marker identification result: status (`OK` / `AMBIGUOUS` / `UNKNOWN`), predicted marker, best and second-best hit fractions and identities, identity margin
 - `{sample}_condensed.tsv` — taxonomic profile with abundances for one sample
 - `{run_name}_full_metadata.tsv` — combined metadata for all samples in the run
 - `{run_name}_YYYYMMDD_log.sql` — SQLite database with per-sample execution status for every pipeline step
@@ -375,9 +373,8 @@ python batch_run_wagtail.py \
 
 After successful execution, all results will be saved in `run/run_name/`. It will contain several directories:
 1. `0_logs_wagtail/` — execution logs and benchmarks for each step; the merged SQLite database (`run_name_YYYYMMDD_log.sql`) records the status of every sample at every step
-2. `0_marker_id/` — per-sample `.marker` files with the amplicon identification result
-3. `6_condensed_wagtail/` — taxonomy profile for each sample
-4. `7_metadata/` — running metadata for each sample and a combined metadata file for all samples
+2. `6_condensed_wagtail/` — taxonomy profile for each sample
+3. `7_metadata/` — running metadata for each sample and a combined metadata file for all samples
 
 Should the pipeline execution result in errors, the SQLite log at `0_logs_wagtail/run_name_YYYYMMDD_log.sql` records exactly which sample failed at which step. The affected sample's downstream steps are skipped while all other samples continue normally.
 
@@ -479,7 +476,8 @@ The best hit fraction was below the confidence threshold (default 0.60). The sam
    → Verify file paths in the filemap are absolute and the files exist
 
 4. Batch jobs fail / OOM\
-   → Check cluster resource limits; `marker_id` requires 24 GB for non-16S samples\
+   → Check cluster resource limits; `marker_id` requires 8 GB in auto-detect mode\
+   → `deblur` wall-time scales automatically on retry (4 h → 8 h → 12 h); ensure `--restart-times 2` is set\
    → Reduce batch size (`-b` parameter)\
    → Check disk space in the output directory
 
