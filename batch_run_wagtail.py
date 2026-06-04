@@ -16,9 +16,9 @@ parser.add_argument("-a", "--acc_list_file", help="Path to the accession list fi
 parser.add_argument("-i", "--input_dir", help="Directory containing batch_*.txt files (for directory input mode).")
 parser.add_argument("-b", "--batch_size", type=int, default=5000, help="Number of accessions per batch (only for CSV input mode).")
 parser.add_argument("-o", "--output_dir", required=True, help="Directory to save batch configs and logs.")
-parser.add_argument("-l", "--log_file", required=True, help="Path to the log file.")
+parser.add_argument("-l", "--log_file", default=None, help="Path to the log file. Required unless --batch-make is used.")
 parser.add_argument("-f", "--file_map", required=True, help="Path to the file map.")
-parser.add_argument("-p", "--pipeline", required=True, help="Path to the Snakemake pipeline.")
+parser.add_argument("-p", "--pipeline", default=None, help="Path to the Snakemake pipeline. Required unless --batch-make is used.")
 parser.add_argument("-w", "--max_workers", type=int, default=1, help="Maximum number of parallel workers.")
 parser.add_argument("-r", "--run_name_prefix", required=True, help="Prefix for the run name in the batch configuration.")
 parser.add_argument("-c", "--request_cores", type=int, default=4, help="Number of cores to request per batch job.")
@@ -36,6 +36,10 @@ parser.add_argument("--amplicon", choices=["16S", "18S", "ITS", "CO1"], default=
 parser.add_argument("--conda-prefix", default=None,
                     help="Path to the shared conda environment prefix directory "
                          "(passed to Snakemake as --conda-prefix).")
+parser.add_argument("--batch-make", action="store_true",
+                    help="Only create batch sample files and config files, then exit. "
+                         "Does not run the pipeline. Requires -a (CSV mode) and -r. "
+                         "Prints ready-to-use Snakemake commands for each batch.")
 args = parser.parse_args()
 
 # === Config ===
@@ -45,6 +49,18 @@ if not args.acc_list_file and not args.input_dir:
 if args.acc_list_file and args.input_dir:
     raise ValueError("Cannot specify both --acc_list_file and --input_dir. Choose one input mode.")
 
+# --batch-make requires CSV mode (directory mode already has existing batch files)
+if args.batch_make and not args.acc_list_file:
+    raise ValueError("--batch-make requires -a/--acc_list_file (CSV mode). "
+                     "Directory mode already has pre-made batch files.")
+
+# Args required for full run but not for --batch-make
+if not args.batch_make:
+    if not args.log_file:
+        raise ValueError("-l/--log_file is required unless --batch-make is used.")
+    if not args.pipeline:
+        raise ValueError("-p/--pipeline is required unless --batch-make is used.")
+
 input_mode = "csv" if args.acc_list_file else "directory"
 acc_list_file = args.acc_list_file
 input_dir = args.input_dir
@@ -52,8 +68,12 @@ batch_size = args.batch_size
 output_dir = args.output_dir
 os.makedirs(output_dir, exist_ok=True)
 log_file = args.log_file
+if log_file is None and not args.batch_make:
+    parser.error("-l/--log_file is required when not using --batch-make.")
 constant_filemap = args.file_map
 pipeline = args.pipeline
+if pipeline is None and not args.batch_make:
+    parser.error("-p/--pipeline is required when not using --batch-make.")
 max_workers = args.max_workers
 run_name_prefix = args.run_name_prefix
 request_cores = args.request_cores
@@ -65,48 +85,50 @@ amplicon = args.amplicon           # None → auto-detect; "16S"/"18S"/"ITS"/"CO
 conda_prefix = args.conda_prefix   # None → Snakemake default
 
 # === Early validation =========================================================
-if os.path.isdir(log_file):
-    raise ValueError(f"--log_file must be a file path, not a directory: {log_file}")
+if not args.batch_make:
+    if os.path.isdir(log_file):
+        raise ValueError(f"--log_file must be a file path, not a directory: {log_file}")
+    if not os.path.exists(pipeline):
+        raise ValueError(f"Pipeline script not found: {pipeline}")
 if input_mode == "csv" and not os.path.exists(acc_list_file):
     raise ValueError(f"Accession list file not found: {acc_list_file}")
 if input_mode == "directory" and not os.path.exists(input_dir):
     raise ValueError(f"Input directory not found: {input_dir}")
 if not os.path.exists(constant_filemap):
     raise ValueError(f"File map not found: {constant_filemap}")
-if not os.path.exists(pipeline):
-    raise ValueError(f"Pipeline script not found: {pipeline}")
 
-print(f"Input mode: {input_mode.upper()}")
-print(f"Execution mode: {execution_mode.upper()}")
-if amplicon:
-    print(f"Amplicon filter: {amplicon} (forced)")
-else:
-    print("Amplicon: auto-detect per sample")
-if execution_mode == "local":
-    print("Running batches locally for testing...")
-else:
-    print("Running batches on cluster using mqsub...")
-
-# Write log header now that validation has passed
-with open(log_file, "a") as logf:
-    logf.write(f"\n[{datetime.now().isoformat()}] === Starting batch Wagtail processing ===\n")
-    logf.write(f"Input mode: {input_mode.upper()}\n")
-    logf.write(f"Execution mode: {execution_mode.upper()}\n")
-    logf.write(f"Amplicon: {amplicon if amplicon else 'auto-detect'}\n")
-    if conda_prefix:
-        logf.write(f"Conda prefix: {conda_prefix}\n")
-    if input_mode == "csv":
-        logf.write(f"Accession list: {acc_list_file}\n")
-        logf.write(f"Batch size: {batch_size}\n")
-        logf.write(f"Randomize: {args.randomize}\n")
-        if args.randomize and args.random_seed:
-            logf.write(f"Random seed: {args.random_seed}\n")
+if not args.batch_make:
+    print(f"Input mode: {input_mode.upper()}")
+    print(f"Execution mode: {execution_mode.upper()}")
+    if amplicon:
+        print(f"Amplicon filter: {amplicon} (forced)")
     else:
-        logf.write(f"Input directory: {input_dir}\n")
-    logf.write(f"Output directory: {output_dir}\n")
-    logf.write(f"Pipeline: {pipeline}\n")
-    if execution_mode == "cluster":
-        logf.write(f"Cluster resources: {request_cores} cores, {request_mem}GB RAM, {request_hours}h\n")
+        print("Amplicon: auto-detect per sample")
+    if execution_mode == "local":
+        print("Running batches locally for testing...")
+    else:
+        print("Running batches on cluster using mqsub...")
+
+    # Write log header now that validation has passed
+    with open(log_file, "a") as logf:
+        logf.write(f"\n[{datetime.now().isoformat()}] === Starting batch Wagtail processing ===\n")
+        logf.write(f"Input mode: {input_mode.upper()}\n")
+        logf.write(f"Execution mode: {execution_mode.upper()}\n")
+        logf.write(f"Amplicon: {amplicon if amplicon else 'auto-detect'}\n")
+        if conda_prefix:
+            logf.write(f"Conda prefix: {conda_prefix}\n")
+        if input_mode == "csv":
+            logf.write(f"Accession list: {acc_list_file}\n")
+            logf.write(f"Batch size: {batch_size}\n")
+            logf.write(f"Randomize: {args.randomize}\n")
+            if args.randomize and args.random_seed:
+                logf.write(f"Random seed: {args.random_seed}\n")
+        else:
+            logf.write(f"Input directory: {input_dir}\n")
+        logf.write(f"Output directory: {output_dir}\n")
+        logf.write(f"Pipeline: {pipeline}\n")
+        if execution_mode == "cluster":
+            logf.write(f"Cluster resources: {request_cores} cores, {request_mem}GB RAM, {request_hours}h\n")
 
 # === Step 1: Process input based on mode ===
 if input_mode == "csv":
@@ -114,12 +136,12 @@ if input_mode == "csv":
     print(f"Reading accession list: {acc_list_file}")
     with open(acc_list_file, "r") as f:
         accs = [line.strip() for line in f if line.strip()]
-    
+
     total_acc = len(accs)
     total_batches = math.ceil(total_acc / batch_size)
-    print(f"Found {total_acc} accessions, will make {total_batches} batches (each {batch_size}, last batch might be less).")
-    
-    # Optional randomization
+    print(f"Found {total_acc} accessions, will make {total_batches} batches "
+          f"(each {batch_size}, last batch might be less).")
+
     if args.randomize:
         print("Randomizing accessions to balance batch sizes...")
         if args.random_seed is not None:
@@ -129,16 +151,15 @@ if input_mode == "csv":
         print("Accessions randomized.")
     else:
         print("Using original order (no randomization).")
-    
-    # Create batch info for CSV mode
+
+    # Build batch_info — reuse the same slice logic as make_batches()
     batch_info = {}
     for i in range(total_batches):
-        batch_num = i + 1
-        start_idx = i * batch_size
-        end_idx = min((i + 1) * batch_size, total_acc)
-        batch_accs = accs[start_idx:end_idx]
+        batch_num  = i + 1
+        start_idx  = i * batch_size
+        end_idx    = min((i + 1) * batch_size, total_acc)
         batch_info[batch_num] = {
-            'accessions': batch_accs,
+            'accessions': accs[start_idx:end_idx],
             'batch_str': str(batch_num).zfill(3),
             'mode': 'csv'
         }
@@ -183,6 +204,100 @@ if start_batch < 1 or start_batch > total_batches:
     raise ValueError(f"--start-batch must be between 1 and {total_batches}")
 if end_batch < start_batch or end_batch > total_batches:
     raise ValueError(f"--end-batch must be between {start_batch} and {total_batches}")
+
+# === make_batches(): split CSV → batch files + config files, print commands ===
+def make_batches(accs, batch_size, output_dir, run_name_prefix,
+                 constant_filemap, amplicon, pipeline,
+                 randomize=False, random_seed=None):
+    """Create batch sample files and config files without running anything.
+
+    Prints a ready-to-paste Snakemake command for each batch so the caller
+    can open one tmux window per batch and run them independently — avoiding
+    the 48-hour manager-job wall-time problem entirely.
+    """
+    if randomize:
+        if random_seed is not None:
+            random.seed(random_seed)
+            print(f"Randomizing with seed {random_seed}...")
+        else:
+            print("Randomizing accessions (no seed — not reproducible)...")
+        random.shuffle(accs)
+
+    total_acc    = len(accs)
+    total_batches = math.ceil(total_acc / batch_size)
+
+    print(f"\nSplitting {total_acc} accessions into {total_batches} batch(es) "
+          f"of up to {batch_size} each.\n")
+
+    created = []   # (batch_num, batch_str, batch_file, config_file, n_samples)
+
+    for i in range(total_batches):
+        batch_num  = i + 1
+        batch_str  = str(batch_num).zfill(3)
+        start_idx  = i * batch_size
+        end_idx    = min((i + 1) * batch_size, total_acc)
+        batch_accs = accs[start_idx:end_idx]
+
+        batch_file  = os.path.join(output_dir, f"batch_{batch_str}.txt")
+        config_file = os.path.join(output_dir, f"config_batch_{batch_str}.yaml")
+
+        # Write sample list
+        if not os.path.exists(batch_file):
+            with open(batch_file, "w") as f:
+                f.write("\n".join(batch_accs) + "\n")
+
+        # Write config
+        if not os.path.exists(config_file):
+            with open(config_file, "w") as cf:
+                cf.write(f"run_name: {run_name_prefix}_batch_{batch_str}\n")
+                cf.write(f"sample_list: {batch_file}\n")
+                cf.write(f"file_map: {constant_filemap}\n")
+                if amplicon:
+                    cf.write(f"amplicon: {amplicon}\n")
+
+        created.append((batch_num, batch_str, batch_file, config_file, len(batch_accs)))
+        print(f"  Batch {batch_str}: {len(batch_accs):>5} samples  "
+              f"→  {os.path.basename(config_file)}")
+
+    # Print ready-to-use Snakemake commands
+    smk = pipeline if pipeline else "pipeline/wagtail.smk"
+    conda_flag = f" --conda-prefix {args.conda_prefix}" if args.conda_prefix else ""
+
+    print(f"\n{'─'*70}")
+    print("Run each batch in a separate tmux window:\n")
+    for _, batch_str, _, config_file, _ in created:
+        print(f"  # Batch {batch_str}")
+        print(f"  snakemake -s {smk} \\")
+        print(f"    --configfile {config_file} \\")
+        print(f"    --profile aqua --jobs 50 \\")
+        print(f"    --keep-going --rerun-incomplete \\")
+        print(f"    --use-conda{conda_flag}")
+        print()
+
+    print(f"{'─'*70}")
+    print(f"Total: {total_batches} batch file(s) written to {output_dir}\n")
+    return created
+
+
+# === Early exit for --batch-make mode ===
+if args.batch_make:
+    os.makedirs(output_dir, exist_ok=True)
+    print(f"Reading accession list: {acc_list_file}")
+    with open(acc_list_file, "r") as f:
+        accs = [line.strip() for line in f if line.strip()]
+    make_batches(
+        accs           = accs,
+        batch_size     = batch_size,
+        output_dir     = output_dir,
+        run_name_prefix= run_name_prefix,
+        constant_filemap= constant_filemap,
+        amplicon       = amplicon,
+        pipeline       = args.pipeline,
+        randomize      = args.randomize,
+        random_seed    = args.random_seed,
+    )
+    raise SystemExit(0)
+
 
 # === Helper functions ===
 def check_job_status(job_id):

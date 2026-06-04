@@ -149,6 +149,7 @@ rule all:
 # Pre-flight QC: subsample reads and align against 16S, 18S, ITS, CO1 databases.
 # Writes the predicted marker to a .marker file. soft-fails if ambiguous.
 checkpoint marker_id:
+    group: "initiate"
     input:
         filemap = config["file_map"],
     output:
@@ -409,7 +410,7 @@ rule deblur:
     threads: 1
     resources:
         mem_mb  = 2000,
-        runtime = lambda wc, attempt: 4 * 60 * attempt   # 4h → 8h → 12h on retry
+        runtime = lambda wc, attempt: 4 * 90 * attempt   # 6h → 12h → 18h on retry
     shell:
         r"""
         source {params.bash_lib}
@@ -556,7 +557,7 @@ rule mappy:
     threads: 1
     resources:
         mem_mb  = 4000,
-        runtime = "24h"
+        runtime = "12h"
     shell:
         r"""
         source {params.bash_lib}
