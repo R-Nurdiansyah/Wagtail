@@ -41,7 +41,6 @@ def _make_stats(marker, hit_fraction, mean_identity, n_reads=1000):
         hit_fraction=hit_fraction,
         mean_identity=mean_identity,
         median_identity=mean_identity,
-        identities=[mean_identity] * n_hits,
     )
 
 
@@ -173,7 +172,7 @@ class TestIdentifyMarker(unittest.TestCase):
 
     CONF   = 0.50   # min_confidence
     MARGIN = 0.05   # min_margin
-    FRAC   = 0.90   # min_16s_fraction
+    FRAC   = 0.90   # min_16s_score (16S combined-score threshold: hit_fraction × mean_identity)
 
     def _call(self, stats_list, conf=CONF, margin=MARGIN, frac=FRAC):
         stats = {s.marker: s for s in stats_list}
@@ -198,10 +197,13 @@ class TestIdentifyMarker(unittest.TestCase):
         self.assertEqual(best.marker, "16S")
 
     def test_16s_priority_at_exact_threshold(self):
-        """hit_fraction == threshold must trigger the rule (>=, not >)."""
+        """16S combined score (hit_fraction × mean_identity) == threshold must
+        trigger the rule (>=, not >). 16S: 0.90 × 1.00 = 0.90 == FRAC(0.90),
+        while 18S has a higher combined score (0.92 × 0.995 = 0.9154) — the
+        priority rule must still call 16S."""
         stats = [
-            _make_stats("16S", hit_fraction=0.90, mean_identity=0.99),
-            _make_stats("18S", hit_fraction=0.91, mean_identity=0.995),
+            _make_stats("16S", hit_fraction=0.90, mean_identity=1.00),   # combined = 0.90 == threshold
+            _make_stats("18S", hit_fraction=0.92, mean_identity=0.995),  # combined = 0.9154 (higher)
             _make_stats("ITS", hit_fraction=0.00, mean_identity=0.0),
             _make_stats("CO1", hit_fraction=0.00, mean_identity=0.0),
         ]
@@ -318,14 +320,14 @@ class TestIdentifyMarker(unittest.TestCase):
         self.assertIsNone(second)
 
     def test_custom_16s_fraction_threshold(self):
-        """Raising min_16s_fraction above the actual 16S fraction must not trigger rule."""
+        """Raising min_16s_score above the actual 16S combined score must not trigger rule."""
         stats = [
             _make_stats("16S", hit_fraction=0.92, mean_identity=0.993),
             _make_stats("18S", hit_fraction=0.93, mean_identity=0.996),
             _make_stats("ITS", hit_fraction=0.00, mean_identity=0.0),
             _make_stats("CO1", hit_fraction=0.00, mean_identity=0.0),
         ]
-        # With frac=0.95, 16S fraction 0.92 should NOT trigger the rule
+        # With frac=0.95, 16S combined score 0.92×0.993=0.914 should NOT trigger the rule
         _, _, best, _ = self._call(stats, frac=0.95)
         # 18S has higher mean identity and rule didn't fire → 18S wins (AMBIGUOUS or OK)
         self.assertEqual(best.marker, "18S")

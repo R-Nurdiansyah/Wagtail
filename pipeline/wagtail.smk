@@ -1,13 +1,20 @@
-# Wagtail pipeline v1.1
-# Changes from v0.15:
-#   - qiime2_import + quality_control merged into import_and_qc (fewer DAG nodes;
-#     intermediate -single.qza written to TMPDIR, never to shared storage)
-#   - export_seqs + export_and_edit_table merged into export_all (same env,
-#     one scheduler round-trip eliminated per sample)
-#   - marker_id removed from group "wagtail" to fix checkpoint deadlock on fresh samples
-#   - _resolve() decorated with @lru_cache — collapses repeated glob calls to 4 total
-#   - get_marker() result cached in _marker_cache dict — one file read per sample
-#   - deblur runtime is now dynamic: 4 h → 8 h → 12 h on successive retries
+# Wagtail pipeline v1.2
+# Changes from v1.1:
+#   - marker_id is now a single BATCHED checkpoint over the whole sample list:
+#     identify_amplicon.py loads each database once and loops every sample, so
+#     the multi-GB minimap2 index is built once per batch instead of once per
+#     sample. Fixes the per-sample memory multiplication / OOM and the
+#     checkpoint-update storm. Writes all 1_marker_id/{sample}.marker files.
+#   - new lightweight per-sample marker_log rule reads each .marker and records
+#     OK/FAIL into SQLite under rule_name "marker_id" (manifest's upstream check
+#     is unchanged). Grouped with "wagtail"; does no alignment.
+#   - manifest now depends on 1_marker_logged/{sample}.logged instead of the
+#     marker file directly.
+# Changes from v0.15 (carried over from v1.1):
+#   - qiime2_import + quality_control merged into import_and_qc
+#   - export_seqs + export_and_edit_table merged into export_all
+#   - _resolve() @lru_cache; get_marker() cached in _marker_cache
+#   - deblur runtime dynamic on retry
 
 import os
 import glob
@@ -74,15 +81,15 @@ def get_marker(wc):
 
     Forced-amplicon mode (--amplicon 16S / 18S / ITS / CO1):
       Returns FORCED_AMPLICON immediately.  The marker_id checkpoint still
-      runs (writing a trivial marker file) so that the manifest rule's
-      explicit input dependency is satisfied, but no checkpoint DAG edge is
-      created here — downstream rules can be scheduled without waiting.
+      runs (writing trivial marker files) so the marker_log/manifest input
+      dependencies are satisfied, but no checkpoint DAG edge is created here.
 
     Auto-detect mode (default):
-      Calls checkpoints.marker_id.get() so Snakemake defers DAG construction
-      until marker_id has run and written the file.  Falls back to "16S" when
-      the file is empty or unreadable (e.g. OOM kill) — downstream rules will
-      still soft-fail via the SQLite check.
+      Calls checkpoints.marker_id.get() — now a single batched job over the
+      whole sample list — so Snakemake defers DAG construction until that job
+      has written every marker file.  Falls back to "16S" when a file is empty
+      or unreadable (e.g. failed sample) — downstream rules still soft-fail via
+      the SQLite check.
     """
     if not AUTO_DETECT:
         return FORCED_AMPLICON
@@ -90,7 +97,7 @@ def get_marker(wc):
     if wc.filename in _marker_cache:
         return _marker_cache[wc.filename]
 
-    checkpoints.marker_id.get(filename=wc.filename)
+    checkpoints.marker_id.get()
     marker_file = f"{run_dir}/{run_name}/1_marker_id/{wc.filename}.marker"
     try:
         with open(marker_file) as fh:
@@ -145,100 +152,136 @@ rule all:
         sql_log
     localrule: True
 
-# ── marker_id ─────────────────────────────────────────────────────────────────
-# Pre-flight QC: subsample reads and align against 16S, 18S, ITS, CO1 databases.
-# Writes the predicted marker to a .marker file. soft-fails if ambiguous.
+# ── marker_id (batched) ───────────────────────────────────────────────────────
+# Pre-flight QC for the WHOLE sample list in a single job. identify_amplicon.py
+# loads each of the 4 databases once and loops over every sample, so the multi-GB
+# minimap2 index is built once per batch instead of once per sample — this is the
+# fix for the per-sample memory multiplication / OOM. Writes one .marker file per
+# sample into 1_marker_id/. SQLite logging is deferred to the per-sample
+# marker_log rule below (keeps this job free of per-sample bookkeeping).
 checkpoint marker_id:
-    group: "initiate"
     input:
-        filemap = config["file_map"],
+        filemap     = config["file_map"],
+        sample_list = filename_list,
     output:
-        marker = f"{run_dir}/{run_name}/1_marker_id/{{filename}}.marker"
-    wildcard_constraints:
-        filename = r"[^\.]+"
+        markers = expand(f"{run_dir}/{run_name}/1_marker_id/{{fn}}.marker", fn=filenames)
     params:
         script          = f"{script_dir}/identify_amplicon.py",
-        sample          = "{filename}",
+        marker_dir      = f"{run_dir}/{run_name}/1_marker_id",
         db_16S          = DB_16S,
         db_18S          = DB_18S,
         db_ITS          = DB_ITS,
         db_CO1          = DB_CO1,
         forced_amplicon = FORCED_AMPLICON,    # "ALL" → auto-detect; else forced
-        sqlite_db       = lambda wc: tmp_db(wc.filename),
-        rule_name       = "marker_id",
-        tmpdir          = lambda wc: tmp_dir(wc.filename),
-        logger          = f"{script_dir}/wagtail_sqlite_logger.py",
-        annotation      = f"{script_dir}/error_annotation.py",
         n_subsample     = 1000,
         min_confidence  = 0.6,
-        bash_lib        = BASH_LIB
+        minimizer_w     = 19,
+        # 10-column header matching identify_amplicon.py's write_marker_file()
+        header          = "status\tpredicted_marker\tbest_combined_score\tbest_mean_identity\tbest_hit_fraction\tsecond_marker\tsecond_combined_score\tsecond_mean_identity\tsecond_hit_fraction\tscore_margin",
     conda:
         "envs/mappy.yaml"
     log:
-        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/marker_id.log"
+        f"{run_dir}/{run_name}/0_logs_wagtail/marker_id_batch.log"
     benchmark:
-        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/marker_id.benchmark.log"
+        f"{run_dir}/{run_name}/0_logs_wagtail/marker_id_batch.benchmark.log"
     threads: 1
     resources:
-        mem_mb  = 320 if not AUTO_DETECT else 8000,  # default to 8GB for auto-detect since alignment can be large; 320MB is enough for the fast path
+        # One index resident at a time (~6.5 GB at w=19) + all subsampled reads.
+        mem_mb  = 320 if not AUTO_DETECT else 10000,
+        # One job for the whole batch — size batches so the auto path fits in 47h.
+        runtime = "1h" if not AUTO_DETECT else "47h"
+    shell:
+        r"""
+        mkdir -p {params.marker_dir} $(dirname {log})
+
+        # ── Forced-amplicon fast path ─────────────────────────────────────────
+        # No alignment needed — write a trivial OK marker for every sample.
+        if [[ "{params.forced_amplicon}" != "ALL" ]]; then
+            while IFS= read -r s || [[ -n "$s" ]]; do
+                [[ -z "$s" ]] && continue
+                printf '%s\n' "{params.header}" > {params.marker_dir}/$s.marker
+                printf 'OK\t{params.forced_amplicon}\t1.0\t1.0\t1.0\tNone\tNA\tNA\tNA\t1.0\n' \
+                    >> {params.marker_dir}/$s.marker
+            done < {input.sample_list}
+            echo "Forced amplicon {params.forced_amplicon} for all samples" > {log}
+            exit 0
+        fi
+
+        # ── Auto-detection: load each DB once, loop all samples ───────────────
+        python {params.script} \
+            --sample-list {input.sample_list} \
+            --file-map    {input.filemap} \
+            --db-16S {params.db_16S} --db-ITS {params.db_ITS} \
+            --db-18S {params.db_18S} --db-CO1 {params.db_CO1} \
+            --n-subsample {params.n_subsample} \
+            --min-confidence {params.min_confidence} \
+            --minimizer-w {params.minimizer_w} \
+            --output-dir {params.marker_dir} \
+            &> {log}
+        """
+
+# ── marker_log ────────────────────────────────────────────────────────────────
+# Lightweight per-sample step: read this sample's .marker file (produced by the
+# batched checkpoint) and record OK/FAIL into its SQLite log under rule_name
+# "marker_id", so manifest's existing upstream check is unchanged. No alignment,
+# no DB load — just a file read + one SQLite write. Grouped with "wagtail" so it
+# rides along in the same cluster job as manifest/import_and_qc for each sample.
+rule marker_log:
+    group: "wagtail"
+    input:
+        marker = f"{run_dir}/{run_name}/1_marker_id/{{filename}}.marker"
+    output:
+        logged = f"{run_dir}/{run_name}/1_marker_logged/{{filename}}.logged"
+    wildcard_constraints:
+        filename = r"[^\.]+"
+    params:
+        sqlite_db = lambda wc: tmp_db(wc.filename),
+        rule_name = "marker_id",     # log under marker_id so manifest's check matches
+        logger    = f"{script_dir}/wagtail_sqlite_logger.py",
+        annotation= f"{script_dir}/error_annotation.py",
+        bash_lib  = BASH_LIB
+    conda:
+        "envs/mappy.yaml"
+    log:
+        f"{run_dir}/{run_name}/0_logs_wagtail/{{filename}}/marker_log.log"
+    threads: 1
+    resources:
+        mem_mb  = 160,
         runtime = "1h"
     shell:
         r"""
         source {params.bash_lib}
         LOGGER={params.logger}
-        mkdir -p $(dirname {output.marker}) {params.tmpdir}
+        mkdir -p $(dirname {output.logged}) $(dirname {log}) $(dirname {params.sqlite_db})
 
-        # ── Forced-amplicon fast path ─────────────────────────────────────────
-        # When --amplicon was passed, skip alignment entirely and write the
-        # marker file with the known amplicon type so downstream rules can proceed immediately.
-        if [[ "{params.forced_amplicon}" != "ALL" ]]; then
-            printf "status\tpredicted_marker\thit_fraction\tmean_identity\tsecond_marker\tsecond_fraction\tsecond_identity\tmargin\n" \
-                > {output.marker}
-            printf "OK\t{params.forced_amplicon}\t1.0\t1.0\tnone\t0.0\t0.0\t1.0\n" \
-                >> {output.marker}
-            echo "Forced amplicon: {params.forced_amplicon}" > {log}
-            wagtail_log_ok {params.sqlite_db} {wildcards.filename} {params.rule_name} {log}
+        # Empty/missing marker = failed sample (no reads, missing file) → soft-fail
+        if [[ ! -s {input.marker} ]]; then
+            echo "ERROR: empty/missing marker file for {wildcards.filename}" > {log}
+            wagtail_log_fail {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation}
+            touch {output.logged}
             wagtail_cleanup {log}
             exit 0
         fi
 
-        # ── Auto-detection path (default) ─────────────────────────────────────
-        set +e
-        python {params.script} \
-            --file-map  {input.filemap} \
-            --sample    {params.sample} \
-            --db-16S    {params.db_16S} \
-            --db-ITS    {params.db_ITS} \
-            --db-CO1    {params.db_CO1} \
-            --db-18S    {params.db_18S} \
-            --n-subsample   {params.n_subsample} \
-            --min-confidence {params.min_confidence} \
-            --output    {output.marker} \
-            &> {log}
-        status=$?
-        set -e
+        # Column map (10-col): f1 status f2 predicted f4 best_mean_id
+        #   f6 second_marker f8 second_mean_id f10 score_margin
+        marker_status=$(tail -n 1 {input.marker} | cut -f1)
+        predicted=$(tail -n 1 {input.marker} | cut -f2)
+        best_id=$(tail -n 1 {input.marker} | cut -f4)
+        second=$(tail -n 1 {input.marker} | cut -f6)
+        second_id=$(tail -n 1 {input.marker} | cut -f8)
+        margin=$(tail -n 1 {input.marker} | cut -f10)
 
-        if [[ $status -ne 0 ]]; then
-            touch {output.marker}
+        if [[ "$marker_status" == "OK" ]]; then
+            wagtail_log_ok {params.sqlite_db} {wildcards.filename} {params.rule_name} {log}
+        elif [[ "$marker_status" == "AMBIGUOUS" ]]; then
+            echo "ERROR: {wildcards.filename} marker ambiguous between best ($predicted mean_id=$best_id) and second-best ($second mean_id=$second_id); margin=$margin" > {log}
             wagtail_log_fail {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation}
         else
-            marker_status=$(tail -n 1 {output.marker} | cut -f1)
-            predicted=$(tail -n 1 {output.marker} | cut -f2)
-            second=$(tail -n 1 {output.marker} | cut -f5)
-            best_id=$(tail -n 1 {output.marker} | cut -f3)
-            second_id=$(tail -n 1 {output.marker} | cut -f6)
-            margin=$(tail -n 1 {output.marker} | cut -f8)
-
-            if [[ "$marker_status" == "AMBIGUOUS" ]]; then
-                echo "ERROR: {wildcards.filename} marker ambiguous between best ($predicted mean_id=$best_id) and second-best ($second mean_id=$second_id); margin=$margin" >> {log}
-                wagtail_log_fail {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation}
-            elif [[ "$marker_status" == "UNKNOWN" ]]; then
-                echo "ERROR: {wildcards.filename} amplicon is not 16S, 18S, ITS, or CO1 (best hit fraction below confidence threshold)" >> {log}
-                wagtail_log_fail {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation}
-            else
-                wagtail_log_ok {params.sqlite_db} {wildcards.filename} {params.rule_name} {log}
-            fi
+            echo "ERROR: {wildcards.filename} marker_id status=$marker_status (predicted=$predicted)" > {log}
+            wagtail_log_fail {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation}
         fi
+        touch {output.logged}
         wagtail_cleanup {log}
         exit 0
         """
@@ -248,7 +291,7 @@ rule manifest:
     group: "wagtail"
     input:
         filemap = config["file_map"],
-        marker  = f"{run_dir}/{run_name}/1_marker_id/{{filename}}.marker"
+        logged  = f"{run_dir}/{run_name}/1_marker_logged/{{filename}}.logged"
     output:
         output_dir = directory(f"{run_dir}/{run_name}/1_manifest/{{filename}}"),
         manifest   = f"{run_dir}/{run_name}/1_manifest/{{filename}}/{{filename}}_manifest.csv"
