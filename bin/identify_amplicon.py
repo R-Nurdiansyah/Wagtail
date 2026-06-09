@@ -10,7 +10,7 @@ Two modes:
                   Loads each database ONCE and loops over every sample, so the
                   multi-GB minimap2 index is built a single time per batch
                   instead of once per sample. Each sample's result is written
-                  to <output-dir>/<sample>.marker.
+                  to <output-dir>/<sample>_marker.json.
 
 Exit codes:
     0  ran to completion (per-sample status is in each .marker file)
@@ -30,6 +30,7 @@ from pathlib import Path
 from dataclasses import dataclass
 import random
 import csv
+import json
 
 import mappy as mp
 
@@ -282,13 +283,6 @@ def identify_marker(
     return "OK", best.marker, best, second
 
 # ── Output ────────────────────────────────────────────────────────────────────
-MARKER_HEADER = [
-    "status", "predicted_marker",
-    "best_combined_score", "best_mean_identity", "best_hit_fraction",
-    "second_marker", "second_combined_score", "second_mean_identity",
-    "second_hit_fraction", "score_margin",
-]
-
 def write_marker_file(
     output_path: str | Path,
     status:      str,
@@ -296,29 +290,37 @@ def write_marker_file(
     best:        AlignmentStats,
     second:      AlignmentStats | None,
 ) -> None:
-    """Write the 10-column marker TSV for one sample."""
+    """Write marker JSON for one sample.
+
+    Keys mirror the old 10-column TSV header plus a 'reference' key that
+    encodes which database family to use downstream (DB_16S, DB_18S, etc.).
+    The reference is only set on a confident "OK" call; AMBIGUOUS/UNKNOWN
+    samples get an empty reference so downstream rules soft-fail.
+    """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    best_score    = best.hit_fraction * best.mean_identity
-    second_score  = (second.hit_fraction * second.mean_identity) if second else 0.0
-    score_margin  = best_score - second_score
+    best_score   = best.hit_fraction * best.mean_identity
+    second_score = (second.hit_fraction * second.mean_identity) if second else 0.0
+    score_margin = best_score - second_score
 
-    with open(output_path, "w", newline="") as fh:
-        writer = csv.writer(fh, delimiter="\t")
-        writer.writerow(MARKER_HEADER)
-        writer.writerow([
-            status,
-            predicted,
-            f"{best_score:.4f}",
-            f"{best.mean_identity:.4f}",
-            f"{best.hit_fraction:.3f}",
-            second.marker                  if second else "None",
-            f"{second_score:.4f}"          if second else "NA",
-            f"{second.mean_identity:.4f}"  if second else "NA",
-            f"{second.hit_fraction:.3f}"   if second else "NA",
-            f"{score_margin:.4f}",
-        ])
+    data = {
+        "status":                status,
+        "predicted_marker":      predicted,
+        "best_combined_score":   f"{best_score:.4f}",
+        "best_mean_identity":    f"{best.mean_identity:.4f}",
+        "best_hit_fraction":     f"{best.hit_fraction:.3f}",
+        "second_marker":         second.marker                    if second else "None",
+        "second_combined_score": f"{second_score:.4f}"            if second else "NA",
+        "second_mean_identity":  f"{second.mean_identity:.4f}"    if second else "NA",
+        "second_hit_fraction":   f"{second.hit_fraction:.3f}"     if second else "NA",
+        "score_margin":          f"{score_margin:.4f}",
+        "reference":             f"DB_{predicted}" if status == "OK" else "",
+    }
+
+    with open(output_path, "w") as fh:
+        json.dump(data, fh, indent=2)
+        fh.write("\n")
 
 # ── Single-sample mode ────────────────────────────────────────────────────────
 def run_single(args) -> int:
@@ -496,13 +498,13 @@ def run_batch(args) -> int:
         status, predicted, best, second = identify_marker(
             sample_stats[s], args.min_confidence, args.min_margin, args.min_16s_score
         )
-        write_marker_file(out_dir / f"{s}.marker", status, predicted, best, second)
+        write_marker_file(out_dir / f"{s}_marker.json", status, predicted, best, second)
         counts[status] = counts.get(status, 0) + 1
 
-    # 4. Failed samples get an empty marker so the DAG can still build (the
+    # 4. Failed samples get an empty file so the DAG can still build (the
     #    downstream SQLite check soft-fails them).
     for s, reason in failed.items():
-        (out_dir / f"{s}.marker").touch()
+        (out_dir / f"{s}_marker.json").touch()
         logging.warning(f"  {s}: {reason} — wrote empty marker")
 
     logging.info(f"Batch complete. Calls: {counts} | failed: {len(failed)}")

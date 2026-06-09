@@ -1,6 +1,23 @@
 import sys
 import sqlite3
 import os
+import glob
+
+
+def _expand_db_args(args):
+    """Expand CLI args into a flat list of *_log.sql files.
+
+    Each arg may be an explicit .sql file or a directory; directories are
+    globbed for '*_log.sql'. This lets rule cleanup pass a single directory
+    instead of thousands of paths (avoids 'Argument list too long' at scale).
+    """
+    files = []
+    for a in args:
+        if os.path.isdir(a):
+            files.extend(sorted(glob.glob(os.path.join(a, "*_log.sql"))))
+        else:
+            files.append(a)
+    return files
 
 def merge_sqlite_logs(merged_db, db_files):
     # Remove merged_db if exists
@@ -46,5 +63,5 @@ if __name__ == "__main__":
         #print("Usage: python sql_merge.py merged_db.db db1.db db2.db ...")
         sys.exit(1)
     merged_db = sys.argv[1]
-    db_files = sys.argv[2:]
+    db_files = _expand_db_args(sys.argv[2:])
     merge_sqlite_logs(merged_db, db_files)

@@ -1,24 +1,33 @@
 # Wagtail pipeline v1.2
 # Changes from v1.1:
-#   - marker_id is now a single BATCHED checkpoint over the whole sample list:
-#     identify_amplicon.py loads each database once and loops every sample, so
-#     the multi-GB minimap2 index is built once per batch instead of once per
-#     sample. Fixes the per-sample memory multiplication / OOM and the
-#     checkpoint-update storm. Writes all 1_marker_id/{sample}.marker files.
-#   - new lightweight per-sample marker_log rule reads each .marker and records
-#     OK/FAIL into SQLite under rule_name "marker_id" (manifest's upstream check
-#     is unchanged). Grouped with "wagtail"; does no alignment.
-#   - manifest now depends on 1_marker_logged/{sample}.logged instead of the
-#     marker file directly.
+#   - marker_id is now a single BATCHED plain RULE over the whole sample list
+#     (no longer a checkpoint): identify_amplicon.py loads each database once and
+#     loops every sample, so the multi-GB minimap2 index is built once per batch
+#     instead of once per sample. Writes all 1_marker_id/{sample}_marker.json and
+#     touches ONE marker_id.done sentinel — not a 5000-file `expand` output —
+#     which keeps the cluster submit command under ARG_MAX at 5k+ samples.
+#   - reference resolution moved from DAG-time Snakemake helpers to RUNTIME:
+#     deblur/mappy/extract_taxonomy each call bin/resolve_reference.py to read
+#     their sample's 'reference' key and glob the database dir. This removes the
+#     checkpoint dependency that the plain rule can no longer satisfy.
+#   - new lightweight per-sample marker_log rule reads each _marker.json (via the
+#     sentinel gate) and records OK/FAIL into SQLite under rule_name "marker_id"
+#     (manifest's upstream check is unchanged). Grouped with "wagtail".
+#   - manifest depends on 1_marker_logged/{sample}.logged instead of the JSON.
+#   - cleanup no longer expands per-sample file lists onto the command line:
+#     sql_merge.py globs the 0_tmp dir and metadata is gathered with `find`
+#     (also ARG_MAX-safe at scale). Supports optional result/intermediate/all
+#     archiving via wagtail.py --archive-* flags.
 # Changes from v0.15 (carried over from v1.1):
 #   - qiime2_import + quality_control merged into import_and_qc
 #   - export_seqs + export_and_edit_table merged into export_all
-#   - _resolve() @lru_cache; get_marker() cached in _marker_cache
+#   - _resolve() @lru_cache for identification databases
 #   - deblur runtime dynamic on retry
 
 import os
 import glob
 import csv
+import json
 from functools import lru_cache
 from pathlib import Path
 from datetime import datetime
@@ -40,7 +49,7 @@ run_name      = config["run_name"]
 # Amplicon filter ─────────────────────────────────────────────────────────────
 # "all"  (default) — auto-detect per sample via the marker_id checkpoint.
 # "16S" | "18S" | "ITS" | "CO1" — skip identification; treat every sample as
-# that amplicon type. Pass via wagtail.py --amplicon or --config amplicon=ITS.
+# chosen amplicon type. Pass via wagtail.py --amplicon or --config amplicon=ITS.
 _AMPLICON_RAW     = config.get("amplicon", "all")
 FORCED_AMPLICON   = _AMPLICON_RAW.upper()
 _VALID_AMPLICONS  = {"ALL", "16S", "18S", "ITS", "CO1"}
@@ -51,6 +60,25 @@ if FORCED_AMPLICON not in _VALID_AMPLICONS:
         f"— or omit to auto-detect."
     )
 AUTO_DETECT = FORCED_AMPLICON == "ALL"   # convenience flag
+
+# ── Archive options (set from wagtail.py --archive-* flags) ───────────────────
+def _truthy(v) -> bool:
+    return str(v).strip().lower() in {"1", "true", "yes", "on"}
+
+ARCHIVE_RESULT       = _truthy(config.get("archive_result", ""))   # zip 0_/6_/7_
+ARCHIVE_ALL          = _truthy(config.get("archive_all", ""))      # zip 0_..7_
+ARCHIVE_INTERMEDIATE = str(config.get("archive_intermediate", "")).strip()  # "" | "all" | "1,3,5"
+
+def _archive_cli() -> str:
+    """Build the wagtail_archive.py flag string for the configured options. Empty = no archiving."""
+    parts = []
+    if ARCHIVE_ALL:
+        parts.append("--archive-all")
+    if ARCHIVE_RESULT:
+        parts.append("--archive-result")
+    if ARCHIVE_INTERMEDIATE:
+        parts.append(f"--archive-intermediate {ARCHIVE_INTERMEDIATE}")
+    return " ".join(parts)
 
 # ── Timestamp / SQLite ───────────────────────────────────────────────────
 def make_timestamp():
@@ -73,45 +101,22 @@ def tmp_dir(filename):
 # Path to the shared bash helper library (generated alongside this .smk)
 BASH_LIB = os.path.join(workflow.basedir, "wagtail_functions.sh")
 
-# ── Marker-aware glob helpers ─────────────────────────────────────────────────
-_marker_cache: dict = {}
+# ── Marker / reference helpers ────────────────────────────────────────────────
+# marker_id writes one _marker.json per sample plus a single batch sentinel (marker_done).
+# Single batch sentinel produced by rule marker_id (avoids huge sample to overflow ARG_MAX when the job is submitted to the cluster).
+marker_done = f"{run_dir}/{run_name}/1_marker_id/marker_id.done"
 
-def get_marker(wc):
-    """Return the predicted (or forced) amplicon marker for a sample.
+def marker_json(filename: str) -> str:
+    """Path to a sample's _marker.json (read at runtime by resolve_reference.py)."""
+    return f"{run_dir}/{run_name}/1_marker_id/{filename}_marker.json"
 
-    Forced-amplicon mode (--amplicon 16S / 18S / ITS / CO1):
-      Returns FORCED_AMPLICON immediately.  The marker_id checkpoint still
-      runs (writing trivial marker files) so the marker_log/manifest input
-      dependencies are satisfied, but no checkpoint DAG edge is created here.
-
-    Auto-detect mode (default):
-      Calls checkpoints.marker_id.get() — now a single batched job over the
-      whole sample list — so Snakemake defers DAG construction until that job
-      has written every marker file.  Falls back to "16S" when a file is empty
-      or unreadable (e.g. failed sample) — downstream rules still soft-fail via
-      the SQLite check.
-    """
-    if not AUTO_DETECT:
-        return FORCED_AMPLICON
-
-    if wc.filename in _marker_cache:
-        return _marker_cache[wc.filename]
-
-    checkpoints.marker_id.get()
-    marker_file = f"{run_dir}/{run_name}/1_marker_id/{wc.filename}.marker"
-    try:
-        with open(marker_file) as fh:
-            reader = csv.DictReader(fh, delimiter="\t")
-            row = next(reader)
-        marker = row["predicted_marker"]
-    except (StopIteration, KeyError, OSError):
-        marker = "16S"
-    _marker_cache[wc.filename] = marker
-    return marker
+# Runtime reference resolver — called from deblur / mappy / extract_taxonomy.
+RESOLVER = f"{script_dir}/resolve_reference.py"
 
 @lru_cache(maxsize=None)
 def _resolve(marker: str, db_dir: str, pattern: str) -> str:
-    """Resolve a single file matching db_dir/pattern. Raises if 0 or >1 match."""
+    """Resolve a single file matching db_dir/pattern. Raises if 0 or >1 match.
+    Used at parse time for the identification databases below."""
     matches = glob.glob(f"{db_dir}/{pattern}")
     if not matches:
         raise FileNotFoundError(f"No file matching '{pattern}' found in {db_dir}")
@@ -119,26 +124,8 @@ def _resolve(marker: str, db_dir: str, pattern: str) -> str:
         raise ValueError(f"Multiple files matching '{pattern}' in {db_dir}: {matches}")
     return matches[0]
 
-def get_deblur_db(wc) -> str:
-    marker = get_marker(wc)
-    if marker == "16S":
-        # denoise-16S uses QIIME2's built-in reference — no external database file exists.
-        # Return the marker file itself as a harmless dummy so Snakemake can build the DAG;
-        # deblur_all.py ignores --reference when marker == 16S.
-        return f"{run_dir}/{run_name}/1_marker_id/{wc.filename}.marker"
-    return _resolve(marker, db_dir, pattern=f"{marker}_deblur*")
-
-def get_mappy_ref(wc) -> str:
-    marker = get_marker(wc)
-    return _resolve(marker, db_dir, pattern=f"{marker}_database*")
-
-def get_tax_ref(wc) -> str:
-    marker = get_marker(wc)
-    return _resolve(marker, db_dir, pattern=f"{marker}_taxonomy*")
-
 # Identification databases are only needed for auto-detection.
 # In forced-amplicon mode these are never passed to identify_amplicon.py,
-# so we skip the resolution step (avoids FileNotFoundError for missing DBs).
 DB_16S = _resolve("16S", db_dir, pattern="16S_database*") if AUTO_DETECT else ""
 DB_18S = _resolve("18S", db_dir, pattern="18S_database*") if AUTO_DETECT else ""
 DB_ITS = _resolve("ITS", db_dir, pattern="ITS_database*") if AUTO_DETECT else ""
@@ -154,19 +141,19 @@ rule all:
 
 # ── marker_id (batched) ───────────────────────────────────────────────────────
 # Pre-flight QC for the WHOLE sample list in a single job. identify_amplicon.py
-# loads each of the 4 databases once and loops over every sample, so the multi-GB
-# minimap2 index is built once per batch instead of once per sample — this is the
-# fix for the per-sample memory multiplication / OOM. Writes one .marker file per
-# sample into 1_marker_id/. SQLite logging is deferred to the per-sample
-# marker_log rule below (keeps this job free of per-sample bookkeeping).
-checkpoint marker_id:
+# loads each of the 4 databases once and loops over every sample. 
+# Writes one _marker.json per sample into 1_marker_id/, then touches `marker_id.done`.
+
+rule marker_id:
+    localrule: not AUTO_DETECT
     input:
         filemap     = config["file_map"],
         sample_list = filename_list,
     output:
-        markers = expand(f"{run_dir}/{run_name}/1_marker_id/{{fn}}.marker", fn=filenames)
+        sentinel = marker_done
     params:
         script          = f"{script_dir}/identify_amplicon.py",
+        forced_script   = f"{script_dir}/write_forced_markers.py",
         marker_dir      = f"{run_dir}/{run_name}/1_marker_id",
         db_16S          = DB_16S,
         db_18S          = DB_18S,
@@ -176,8 +163,6 @@ checkpoint marker_id:
         n_subsample     = 1000,
         min_confidence  = 0.6,
         minimizer_w     = 19,
-        # 10-column header matching identify_amplicon.py's write_marker_file()
-        header          = "status\tpredicted_marker\tbest_combined_score\tbest_mean_identity\tbest_hit_fraction\tsecond_marker\tsecond_combined_score\tsecond_mean_identity\tsecond_hit_fraction\tscore_margin",
     conda:
         "envs/mappy.yaml"
     log:
@@ -195,15 +180,14 @@ checkpoint marker_id:
         mkdir -p {params.marker_dir} $(dirname {log})
 
         # ── Forced-amplicon fast path ─────────────────────────────────────────
-        # No alignment needed — write a trivial OK marker for every sample.
+        # No alignment needed — write a trivial OK marker JSON for every sample.
         if [[ "{params.forced_amplicon}" != "ALL" ]]; then
-            while IFS= read -r s || [[ -n "$s" ]]; do
-                [[ -z "$s" ]] && continue
-                printf '%s\n' "{params.header}" > {params.marker_dir}/$s.marker
-                printf 'OK\t{params.forced_amplicon}\t1.0\t1.0\t1.0\tNone\tNA\tNA\tNA\t1.0\n' \
-                    >> {params.marker_dir}/$s.marker
-            done < {input.sample_list}
-            echo "Forced amplicon {params.forced_amplicon} for all samples" > {log}
+            python {params.forced_script} \
+                --sample-list {input.sample_list} \
+                --output-dir  {params.marker_dir} \
+                --marker      {params.forced_amplicon} \
+                &> {log}
+            touch {output.sentinel}
             exit 0
         fi
 
@@ -218,23 +202,25 @@ checkpoint marker_id:
             --minimizer-w {params.minimizer_w} \
             --output-dir {params.marker_dir} \
             &> {log}
+        touch {output.sentinel}
         """
 
 # ── marker_log ────────────────────────────────────────────────────────────────
-# Lightweight per-sample step: read this sample's .marker file (produced by the
-# batched checkpoint) and record OK/FAIL into its SQLite log under rule_name
-# "marker_id", so manifest's existing upstream check is unchanged. No alignment,
-# no DB load — just a file read + one SQLite write. Grouped with "wagtail" so it
-# rides along in the same cluster job as manifest/import_and_qc for each sample.
+# Lightweight per-sample step: read this sample's _marker.json (produced by the
+# marker_id rule) and record OK/FAIL into its SQLite log under rule_name
+# "marker_id", so manifest's existing upstream check is unchanged.
+
 rule marker_log:
     group: "wagtail"
     input:
-        marker = f"{run_dir}/{run_name}/1_marker_id/{{filename}}.marker"
+        sentinel = marker_done
     output:
         logged = f"{run_dir}/{run_name}/1_marker_logged/{{filename}}.logged"
     wildcard_constraints:
         filename = r"[^\.]+"
     params:
+        marker    = lambda wc: marker_json(wc.filename),
+        reader    = f"{script_dir}/read_marker_fields.py",
         sqlite_db = lambda wc: tmp_db(wc.filename),
         rule_name = "marker_id",     # log under marker_id so manifest's check matches
         logger    = f"{script_dir}/wagtail_sqlite_logger.py",
@@ -254,8 +240,8 @@ rule marker_log:
         LOGGER={params.logger}
         mkdir -p $(dirname {output.logged}) $(dirname {log}) $(dirname {params.sqlite_db})
 
-        # Empty/missing marker = failed sample (no reads, missing file) → soft-fail
-        if [[ ! -s {input.marker} ]]; then
+        # Empty/missing marker JSON = failed sample (no reads, missing file) → soft-fail
+        if [[ ! -s {params.marker} ]]; then
             echo "ERROR: empty/missing marker file for {wildcards.filename}" > {log}
             wagtail_log_fail {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation}
             touch {output.logged}
@@ -263,14 +249,14 @@ rule marker_log:
             exit 0
         fi
 
-        # Column map (10-col): f1 status f2 predicted f4 best_mean_id
-        #   f6 second_marker f8 second_mean_id f10 score_margin
-        marker_status=$(tail -n 1 {input.marker} | cut -f1)
-        predicted=$(tail -n 1 {input.marker} | cut -f2)
-        best_id=$(tail -n 1 {input.marker} | cut -f4)
-        second=$(tail -n 1 {input.marker} | cut -f6)
-        second_id=$(tail -n 1 {input.marker} | cut -f8)
-        margin=$(tail -n 1 {input.marker} | cut -f10)
+        # Parse the marker JSON via a helper script (6 fields, one per line).
+        _json_vals=$(python {params.reader} {params.marker})
+        marker_status=$(echo "$_json_vals" | sed -n '1p')
+        predicted=$(echo "$_json_vals"     | sed -n '2p')
+        best_id=$(echo "$_json_vals"       | sed -n '3p')
+        second=$(echo "$_json_vals"        | sed -n '4p')
+        second_id=$(echo "$_json_vals"     | sed -n '5p')
+        margin=$(echo "$_json_vals"        | sed -n '6p')
 
         if [[ "$marker_status" == "OK" ]]; then
             wagtail_log_ok {params.sqlite_db} {wildcards.filename} {params.rule_name} {log}
@@ -350,9 +336,8 @@ rule manifest:
         """
 
 # ── import_and_qc ─────────────────────────────────────────────────────────────
-# Merged from qiime2_import + quality_control: the intermediate -single.qza
-# is kept in TMPDIR and never materialised as a tracked output, eliminating
-# one DAG node and one round-trip to shared storage per sample.
+# Merged from qiime2_import + quality_control
+
 rule import_and_qc:
     group: "wagtail"
     input:
@@ -425,7 +410,6 @@ rule deblur:
     group: "wagtail"
     input:
         filtered    = f"{run_dir}/{run_name}/2_qc_wagtail/{{filename}}-filtered.qza",
-        reference   = lambda wc: get_deblur_db(wc),
     output:
         representative = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-rep-seqs.qza",
         table          = f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}-table.qza",
@@ -433,9 +417,11 @@ rule deblur:
     wildcard_constraints:
         filename = r"[^\.]+"
     params:
-        path      = directory(f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}"),
-        script    = f"{script_dir}/deblur_all.py",
-        marker    = lambda wc: get_marker(wc),
+        path        = directory(f"{run_dir}/{run_name}/3_deblur_wagtail/{{filename}}"),
+        script      = f"{script_dir}/deblur_all.py",
+        resolver    = RESOLVER,
+        marker_json = lambda wc: marker_json(wc.filename),
+        db_dir      = db_dir,
         sqlite_db = lambda wc: tmp_db(wc.filename),
         rule_name = "deblur",
         upstream  = "import_and_qc",
@@ -467,12 +453,19 @@ rule deblur:
             && wagtail_cleanup {log} && exit 0
 
         export TMPDIR={params.tmpdir}
+        # Resolve marker + deblur reference at runtime from this sample's JSON
+        # (16S → empty reference, deblur_all.py uses QIIME2's built-in for 16S).
+        MARKER=$(python {params.resolver} --marker-json {params.marker_json} \
+            --db-dir {params.db_dir} --kind deblur --what marker)
+        REF=$(python {params.resolver} --marker-json {params.marker_json} \
+            --db-dir {params.db_dir} --kind deblur --what path)
+
         set +e
         python {params.script} \
             -i {input.filtered} -o {params.path} -t {threads} \
             -r {output.representative} -a {output.table} -s {output.stats} \
-            --marker    {params.marker} \
-            --reference {input.reference} \
+            --marker    "$MARKER" \
+            --reference "$REF" \
             &> {log}
         status=$?
         set -e
@@ -489,9 +482,8 @@ rule deblur:
         """
 
 # ── export_all ────────────────────────────────────────────────────────────────
-# Merged from export_seqs + export_and_edit_table: both rules depend only on
-# deblur outputs and share the same conda env, so running them sequentially
-# in one job eliminates one DAG node and one scheduler round-trip per sample.
+# Merged from export_seqs + export_and_edit_table
+
 rule export_all:
     group: "wagtail"
     input:
@@ -575,14 +567,16 @@ rule mappy:
     group: "wagtail"
     input:
         F   = f"{run_dir}/{run_name}/4_rep_seqs_wagtail/{{filename}}/dna-sequences.fasta",
-        ref = lambda wc: get_mappy_ref(wc),
     output:
         align = f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_alignment.tsv",
         meta  = f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_metadata.tsv"
     wildcard_constraints:
         filename = r"[^\.]+"
     params:
-        script    = f"{script_dir}/mappy_script.py",
+        script      = f"{script_dir}/mappy_script.py",
+        resolver    = RESOLVER,
+        marker_json = lambda wc: marker_json(wc.filename),
+        db_dir      = db_dir,
         sample    = "{filename}",
         sqlite_db = lambda wc: tmp_db(wc.filename),
         rule_name = "mappy",
@@ -612,9 +606,14 @@ rule mappy:
             && wagtail_log_fail {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation} \
             && wagtail_cleanup {log} && exit 0
 
+        # Resolve the alignment database at runtime from this sample's JSON.
+        REF=$(python {params.resolver} \
+            --marker-json {params.marker_json} --db-dir {params.db_dir} \
+            --kind database --what path)
+
         set +e
         python {params.script} \
-            -i {input.F} -r {input.ref} \
+            -i {input.F} -r "$REF" \
             -a {output.align} -m {output.meta} -s {params.sample} \
             &> {log}
         status=$?
@@ -632,13 +631,15 @@ rule extract_taxonomy:
     input:
         align       = f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_alignment.tsv",
         table       = f"{run_dir}/{run_name}/5_taxonomy_wagtail/{{filename}}/{{filename}}_table_edit.tsv",
-        reference   = lambda wc: get_tax_ref(wc),
     output:
         condensed = f"{run_dir}/{run_name}/6_condensed_wagtail/{{filename}}_condensed.tsv"
     wildcard_constraints:
         filename = r"[^\.]+"
     params:
-        script    = f"{script_dir}/extract_taxonomy.py",
+        script      = f"{script_dir}/extract_taxonomy.py",
+        resolver    = RESOLVER,
+        marker_json = lambda wc: marker_json(wc.filename),
+        db_dir      = db_dir,
         sample    = "{filename}",
         sqlite_db = lambda wc: tmp_db(wc.filename),
         rule_name = "extract_taxonomy",
@@ -668,11 +669,23 @@ rule extract_taxonomy:
             && wagtail_log_fail {params.sqlite_db} {wildcards.filename} {params.rule_name} {log} {params.annotation} \
             && wagtail_cleanup {log} && exit 0
 
+        # Resolve the taxonomy reference at runtime; pass -r only when one exists.
+        REF=$(python {params.resolver} \
+            --marker-json {params.marker_json} --db-dir {params.db_dir} \
+            --kind taxonomy --what path)
+
         set +e
-        python {params.script} \
-            -i {input.align} -t {input.table} -r {input.reference} \
-            -o {output.condensed} -s {params.sample} \
-            &> {log}
+        if [[ -n "$REF" ]]; then
+            python {params.script} \
+                -i {input.align} -t {input.table} -r "$REF" \
+                -o {output.condensed} -s {params.sample} \
+                &> {log}
+        else
+            python {params.script} \
+                -i {input.align} -t {input.table} \
+                -o {output.condensed} -s {params.sample} \
+                &> {log}
+        fi
         status=$?
         set -e
 
@@ -836,15 +849,19 @@ rule cleanup:
     wildcard_constraints:
         filename = r"[^\.]+"
     params:
-        merge_script = f"{script_dir}/sql_merge.py",
-        dbs          = expand(f"{run_dir}/{run_name}/0_tmp/{{filename}}_log.sql", filename=filenames),
-        target       = lambda w, output: str(Path(output.merged).parent.parent),
-        tmpdir       = lambda w, output: str(Path(output.merged).parent.parent / "0_tmp")
+        merge_script   = f"{script_dir}/sql_merge.py",
+        target         = lambda w, output: str(Path(output.merged).parent.parent),
+        tmpdir         = lambda w, output: str(Path(output.merged).parent.parent / "0_tmp"),
+        metadata_dir   = f"{run_dir}/{run_name}/7_metadata",
+        archive_script = f"{script_dir}/wagtail_archive.py",
+        archive_cli    = _archive_cli(),     # "" → no archiving requested
+        run_name       = run_name
     conda:
         "envs/mappy.yaml"
     log:
         merger       = f"{run_dir}/{run_name}/0_logs_wagtail/merger.log",
         cleaning     = f"{run_dir}/{run_name}/0_logs_wagtail/cleaning.log",
+        archive      = f"{run_dir}/{run_name}/0_logs_wagtail/archive.log",
         full_metadata= f"{run_dir}/{run_name}/0_logs_wagtail/full_metadata.log"
     threads: 1
     resources:
@@ -852,19 +869,44 @@ rule cleanup:
         runtime = "2h"
     shell:
         r"""
-        # Step 1: Merge per-sample SQLite logs
+        # NOTE: at 5k+ samples the per-sample file lists must NOT be expanded onto
+        # a command line (ARG_MAX → "Argument list too long"). sql_merge.py is given
+        # the 0_tmp directory to glob, and metadata is gathered with `find`; only
+        # single representative inputs ([0]) are referenced directly.
+
+        # Step 1: Merge per-sample SQLite logs (script globs 0_tmp/*_log.sql)
         touch {input.metadata[0]} {input.community[0]}
-        python {params.merge_script} {output.merged} {params.dbs} &> {log.merger}
+        python {params.merge_script} {output.merged} {params.tmpdir} &> {log.merger}
         sleep 2
 
-        # Step 2: Clean intermediate directories
+        # Step 2: Merge per-sample metadata into one file (a final result, so it
+        #         must exist before any --archive-result / --archive-all zip).
+        #         Header from the first sample; bodies gathered via find so the
+        #         path list never hits the command line. -mindepth 2 skips the
+        #         top-level <run>_full_metadata.tsv we are writing here.
+        (head -n 1 {input.metadata[0]} > {output.full_metadata} \
+            && find {params.metadata_dir} -mindepth 2 -name '*_metadata.tsv' -type f \
+                | sort | while IFS= read -r f; do tail -n +2 -q "$f"; done \
+                >> {output.full_metadata}) \
+            &> {log.full_metadata}
+
+        # Step 3: Drop the scratch dir, then (optionally) archive. 0_tmp is
+        #         removed first so it never lands in a 0_ archive; the 1-5
+        #         intermediates are still present here for --archive-intermediate
+        #         / --archive-all.
         rm -rf {params.tmpdir}
+        if [[ -n "{params.archive_cli}" ]]; then
+            python {params.archive_script} \
+                --run-dir  {params.target} \
+                --run-name {params.run_name} \
+                {params.archive_cli} \
+                &> {log.archive}
+        else
+            echo "No archiving requested" &> {log.archive}
+        fi
+
+        # Step 4: Delete the intermediate stage directories (1-5)
         rm -rf {params.target}/[1-5]_*
         touch {output.cleanup_done}
         echo "Cleanup completed" &> {log.cleaning}
-
-        # Step 3: Merge per-sample metadata into one file
-        (head -n 1 {input.metadata[0]} > {output.full_metadata} \
-            && tail -n +2 -q {input.metadata} >> {output.full_metadata}) \
-            &> {log.full_metadata}
         """

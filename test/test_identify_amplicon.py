@@ -6,10 +6,12 @@ Covers:
   - reads_from_filemap()   – TSV lookup helpers
   - subsample_reads()      – reservoir-sampling FASTQ reader
   - identify_marker()      – ranking, confidence gates, 16S priority rule
+  - write_marker_file()    – v1.2 JSON marker output + OK-only 'reference' key
 """
 
 import csv
 import gzip
+import json
 import os
 import sys
 import tempfile
@@ -23,6 +25,7 @@ try:
         identify_marker,
         reads_from_filemap,
         subsample_reads,
+        write_marker_file,
     )
     _MAPPY_AVAILABLE = True
 except ImportError:
@@ -331,6 +334,74 @@ class TestIdentifyMarker(unittest.TestCase):
         _, _, best, _ = self._call(stats, frac=0.95)
         # 18S has higher mean identity and rule didn't fire → 18S wins (AMBIGUOUS or OK)
         self.assertEqual(best.marker, "18S")
+
+
+# ── write_marker_file (v1.2 JSON output) ──────────────────────────────────────
+
+@unittest.skipUnless(_MAPPY_AVAILABLE, "mappy not installed in this environment")
+class TestWriteMarkerFile(unittest.TestCase):
+    """v1.2 writes one JSON marker file per sample (was a 10-column TSV).
+    The 'reference' key (DB_<marker>) is only populated on a confident OK call;
+    AMBIGUOUS/UNKNOWN samples get an empty reference so downstream soft-fails."""
+
+    EXPECTED_KEYS = (
+        "status", "predicted_marker", "best_combined_score", "best_mean_identity",
+        "best_hit_fraction", "second_marker", "second_combined_score",
+        "second_mean_identity", "second_hit_fraction", "score_margin", "reference",
+    )
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _write(self, status, predicted, best, second=None):
+        path = os.path.join(self.tmp.name, f"{predicted}_marker.json")
+        write_marker_file(path, status, predicted, best, second)
+        with open(path) as fh:
+            return json.load(fh)
+
+    def test_output_is_valid_json_with_all_keys(self):
+        data = self._write("OK", "16S", _make_stats("16S", 0.99, 0.99))
+        for key in self.EXPECTED_KEYS:
+            self.assertIn(key, data)
+
+    def test_reference_set_on_ok(self):
+        data = self._write("OK", "ITS", _make_stats("ITS", 0.95, 0.97))
+        self.assertEqual(data["reference"], "DB_ITS")
+        self.assertEqual(data["status"], "OK")
+        self.assertEqual(data["predicted_marker"], "ITS")
+
+    def test_reference_empty_when_ambiguous(self):
+        data = self._write("AMBIGUOUS", "ITS",
+                           _make_stats("ITS", 0.90, 0.95),
+                           _make_stats("18S", 0.88, 0.949))
+        self.assertEqual(data["reference"], "")
+
+    def test_reference_empty_when_unknown(self):
+        data = self._write("UNKNOWN", "16S", _make_stats("16S", 0.40, 0.95))
+        self.assertEqual(data["reference"], "")
+
+    def test_second_none_placeholders(self):
+        data = self._write("OK", "CO1", _make_stats("CO1", 0.92, 0.96), second=None)
+        self.assertEqual(data["second_marker"], "None")
+        self.assertEqual(data["second_combined_score"], "NA")
+        self.assertEqual(data["second_mean_identity"], "NA")
+        self.assertEqual(data["second_hit_fraction"], "NA")
+
+    def test_second_values_when_present(self):
+        data = self._write("OK", "16S",
+                           _make_stats("16S", 0.99, 0.99),
+                           _make_stats("18S", 0.50, 0.95))
+        self.assertEqual(data["second_marker"], "18S")
+        self.assertEqual(data["second_combined_score"], "0.4750")   # 0.50 × 0.95
+
+    def test_score_margin_is_best_minus_second(self):
+        data = self._write("OK", "ITS",
+                           _make_stats("ITS", 1.00, 0.90),   # combined 0.90
+                           _make_stats("18S", 1.00, 0.85))   # combined 0.85
+        self.assertEqual(data["score_margin"], "0.0500")
 
 
 if __name__ == "__main__":
