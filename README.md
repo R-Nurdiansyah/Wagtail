@@ -305,16 +305,17 @@ python wagtail.py --archive-all --use-conda -c 8 --configfile pipeline/config.ya
 
 #### Batch processing
 
+`batch_run_wagtail.py` splits a large accession list into fixed-size batches, writes a per-batch `config_batch_NNN.yaml`, and runs Wagtail on each batch — locally or by submitting to a cluster with `mqsub`. Each batch runs as its own Wagtail run named `<run_name_prefix>_batch_NNN`, with outputs under `run/<run_name_prefix>_batch_NNN/`.
+
 **WHEN TO USE BATCH PROCESSING**
 - Large datasets (>1000 samples)
-- Cluster computing environments
+- Cluster computing environments (e.g. QUT Aqua)
 - Need to resume interrupted runs
 - Want to process samples in manageable chunks
-- Assuming that you have an HPC (e.g. QUT Aqua) environment
 
 **STEP 1: PREPARE SAMPLE NAME/ACCESSION LIST**
 
-Create a text file with one sample name/accession per line:
+Create a text file with one sample name/accession per line. Every accession must have a matching entry in your `file_map`:
 ```
 SRR12345678
 SRR12345679
@@ -322,6 +323,8 @@ SRR12345680
 ```
 
 **STEP 2: RUN BATCH SCRIPT**
+
+`-p` points at the **Wagtail wrapper** (`wagtail.py`); the script passes the Snakemake flags through it.
 
 Local execution (testing/small datasets):
 ```bash
@@ -337,7 +340,7 @@ python batch_run_wagtail.py \
   -c 4 -m 8
 ```
 
-Cluster execution (production):
+Cluster execution (production, submits each batch with `mqsub`):
 ```bash
 python batch_run_wagtail.py \
   -a accession_list.txt \
@@ -351,34 +354,7 @@ python batch_run_wagtail.py \
   -c 8 -m 16 -t 48
 ```
 
-**BATCH SCRIPT OPTIONS**
-
-Input modes:
-```
-  -a FILE         Accession list file
-  -i DIR          Directory with existing batch files (resume mode)
-```
-
-Execution:
-```
-  --execution-mode local|cluster    Run locally or submit to cluster
-  -b SIZE         Batch size (samples per batch)
-  -c CORES        CPU cores per batch job
-  -m MEM          Memory (GB) per batch job
-  -t HOURS        Time limit (hours) per batch job
-```
-
-Randomization:
-```
-  --randomize     Shuffle accessions before batching
-  --random-seed N Use specific random seed
-```
-
-Resume/range:
-```
-  --start-batch N Start from specific batch number
-  --end-batch N   End at specific batch number
-```
+Add `--amplicon 16S` (or `18S`/`ITS`/`CO1`) to force every batch to one amplicon type (skips auto-detection), and `--conda-prefix /path/to/envs` to reuse a shared conda environment directory across batches.
 
 **STEP 3: MONITOR PROGRESS**
 ```bash
@@ -386,13 +362,70 @@ tail -f batch_log.log
 ls output_dir/batch_*_run_status.txt
 ```
 
-Resume a specific batch range:
+**RESUMING & COMPLETION TRACKING**
+
+Re-running the **same command** is safe and resumes where it left off. A batch is treated as **complete only when the pipeline's own `cleanup_done.txt` sentinel exists** (`run/<run_name>/0_logs_wagtail/cleanup_done.txt`) — not merely because a cluster job was submitted or left the queue. On re-run:
+
+- **Completed** batches (sentinel present, or status file `EXITCODE=0`) are skipped.
+- **Incomplete** cluster batches (submitted but no sentinel — e.g. the job failed or was killed) are **re-submitted**.
+- **Sample-level failures** (`EXITCODE=1`) are **not** retried automatically, to avoid looping on bad input. To force a rerun, delete that batch's `batch_NNN_run_status.txt`.
+
+> Tip: because completion is confirmed via `cleanup_done.txt`, a flaky `qstat`/`mqsub` no longer makes the script falsely mark a batch "done".
+
+Resume a specific batch range (directory mode reuses the `batch_*.txt` files already written to the output dir):
 ```bash
 python batch_run_wagtail.py \
   -i /path/to/existing/batches \
+  -o /path/to/output -l batch_log.log \
+  -f /path/to/file_map.txt -p /path/to/wagtail.py \
+  -r "my_batch_run" \
+  --execution-mode cluster \
   --start-batch 5 --end-batch 10 \
-  [other options...]
+  -c 8 -m 16 -t 48
 ```
+
+#### Generate batch files only (`--batch-make`)
+
+For very large runs it is often better to launch each batch independently (e.g. one `tmux` window or one `mqsub` per batch) than to keep a single long-lived "manager" process alive — that manager can itself hit the cluster wall-time limit. `--batch-make` writes the `batch_NNN.txt` + `config_batch_NNN.yaml` files and **prints a ready-to-paste Snakemake command for each batch**, then exits without running anything:
+
+```bash
+python batch_run_wagtail.py \
+  -a accession_list.txt -b 1000 \
+  -o /path/to/output \
+  -f /path/to/file_map.txt \
+  -p /path/to/wagtail.py \
+  -r "my_batch_run" \
+  --batch-make
+```
+
+(`-l`/`--log_file` and a live run are not required in this mode.) Copy each printed command into its own window/job to run the batches in parallel.
+
+**BATCH SCRIPT OPTIONS**
+
+| Flag | Description |
+|------|-------------|
+| `-a, --acc_list_file FILE` | Accession list (CSV input mode). Mutually exclusive with `-i`. |
+| `-i, --input_dir DIR` | Directory of existing `batch_*.txt` files (resume/directory mode). |
+| `-o, --output_dir DIR` | **(required)** Where batch files, configs, and status files are written. |
+| `-l, --log_file FILE` | Run log. Required unless `--batch-make`. |
+| `-f, --file_map FILE` | **(required)** Shared file map for all batches. |
+| `-p, --pipeline FILE` | Path to `wagtail.py`. Required unless `--batch-make`. |
+| `-r, --run_name_prefix STR` | **(required)** Run name prefix; each batch becomes `<prefix>_batch_NNN`. |
+| `-b, --batch_size N` | Samples per batch (CSV mode, default 5000). |
+| `-c, --request_cores N` | Cores per batch job (default 4). |
+| `-m, --request_mem N` | Memory in GB per batch job (default 8). |
+| `-t, --request_hours N` | Wall-time hours per batch job, cluster mode (default 48). |
+| `-w, --max_workers N` | Batches to run in parallel (default 1 = sequential; recommended for queues). |
+| `--execution-mode local\|cluster` | Run locally or submit via `mqsub` (default local). |
+| `--amplicon 16S\|18S\|ITS\|CO1` | Force all batches to one amplicon (default: auto-detect). |
+| `--conda-prefix DIR` | Shared conda env prefix passed to Snakemake. |
+| `--randomize` | Shuffle accessions before batching (CSV mode). |
+| `--random-seed N` | Seed for reproducible shuffling (pin this when resuming a randomized run). |
+| `--start-batch N` / `--end-batch N` | Process only an inclusive batch-number range. |
+| `--wait-time N` | Seconds between cluster job-status checks (default 30). |
+| `--batch-make` | Only create batch/config files and print per-batch commands, then exit. |
+
+> When `--randomize` is used without `--random-seed`, the batching is non-reproducible — pin a seed if you intend to resume the run later, otherwise re-running will reshuffle and the script will warn that batch files changed.
 
 #### Code examples
 
@@ -406,21 +439,25 @@ python batch_run_wagtail.py \
   -c 2 -m 4
 ```
 
-Production cluster run (10,000 samples in batches of 500):
+Production cluster run (10,000 samples in batches of 500, reproducible shuffle):
 ```bash
 python batch_run_wagtail.py \
   -a large_dataset.txt -b 500 \
   -o production_output -l production.log \
   -f file_map.txt -p wagtail.py \
   -r "production_run" --execution-mode cluster \
-  --randomize -c 16 -m 32 -t 72
+  --randomize --random-seed 42 \
+  -c 16 -m 32 -t 72
 ```
 
-Resume interrupted run from batch 10:
+Resume an interrupted run from batch 10 (skips already-completed batches automatically):
 ```bash
 python batch_run_wagtail.py \
-  -i production_output --start-batch 10 \
-  --execution-mode cluster \
+  -i production_output \
+  -o production_output -l production.log \
+  -f file_map.txt -p wagtail.py \
+  -r "production_run" \
+  --execution-mode cluster --start-batch 10 \
   -c 16 -m 32 -t 72
 ```
 

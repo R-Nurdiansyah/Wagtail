@@ -1,594 +1,662 @@
 #!/usr/bin/env python3
-import os
-import math
-import subprocess
-import concurrent.futures
+"""
+batch_run_wagtail.py — split an accession list into batches and run the Wagtail
+pipeline on each, locally or on a cluster (via mqsub).
+
+Completion is decided by the pipeline's own ``cleanup_done.txt`` sentinel
+(written by rule cleanup), not by the queue-exit status: mqsub returns 0 on
+*submission* and qstat only tells us a job left the queue — neither proves the
+pipeline finished. A batch is "done" iff
+``<wagtail_root>/run/<run_name>/0_logs_wagtail/cleanup_done.txt`` exists.
+"""
+
 import argparse
+import concurrent.futures
 import glob
+import math
+import os
 import random
 import re
+import subprocess
+import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime
 
-# === Argparse for Config ===
-parser = argparse.ArgumentParser(description="Batch run Wagtail pipeline.")
-parser.add_argument("-a", "--acc_list_file", help="Path to the accession list file (for CSV input mode).")
-parser.add_argument("-i", "--input_dir", help="Directory containing batch_*.txt files (for directory input mode).")
-parser.add_argument("-b", "--batch_size", type=int, default=5000, help="Number of accessions per batch (only for CSV input mode).")
-parser.add_argument("-o", "--output_dir", required=True, help="Directory to save batch configs and logs.")
-parser.add_argument("-l", "--log_file", default=None, help="Path to the log file. Required unless --batch-make is used.")
-parser.add_argument("-f", "--file_map", required=True, help="Path to the file map.")
-parser.add_argument("-p", "--pipeline", default=None, help="Path to the Snakemake pipeline. Required unless --batch-make is used.")
-parser.add_argument("-w", "--max_workers", type=int, default=1, help="Maximum number of parallel workers.")
-parser.add_argument("-r", "--run_name_prefix", required=True, help="Prefix for the run name in the batch configuration.")
-parser.add_argument("-c", "--request_cores", type=int, default=4, help="Number of cores to request per batch job.")
-parser.add_argument("-m", "--request_mem", type=int, default=8, help="Memory (GB) to request per batch job.")
-parser.add_argument("-t", "--request_hours", type=int, default=48, help="Number of hours to request per batch job.")
-parser.add_argument("--start-batch", type=int, default=1, help="Batch number to start from (inclusive, default: 1).")
-parser.add_argument("--end-batch", type=int, default=None, help="Batch number to end at (inclusive, default: last batch).")
-parser.add_argument("--wait-time", type=int, default=30, help="Time to wait between job status checks (seconds).")
-parser.add_argument("--execution-mode", choices=["local", "cluster"], default="local", help="Execution mode: 'local' for local execution, 'cluster' for mqsub (default: cluster).")
-parser.add_argument("--randomize", action="store_true", help="Randomize accessions before batching to balance sample sizes (only for CSV input mode).")
-parser.add_argument("--random-seed", type=int, default=None, help="Random seed for reproducible randomization.")
-parser.add_argument("--amplicon", choices=["16S", "18S", "ITS", "CO1"], default=None,
-                    help="Force all batches to a specific amplicon type, skipping auto-detection. "
-                         "Omit to auto-detect per sample (default).")
-parser.add_argument("--conda-prefix", default=None,
-                    help="Path to the shared conda environment prefix directory "
-                         "(passed to Snakemake as --conda-prefix).")
-parser.add_argument("--batch-make", action="store_true",
-                    help="Only create batch sample files and config files, then exit. "
-                         "Does not run the pipeline. Requires -a (CSV mode) and -r. "
-                         "Prints ready-to-use Snakemake commands for each batch.")
-args = parser.parse_args()
+# Batch files are named batch_<num>.txt; numbers are zero-padded to >= 3 digits
+# for nice sorting but parsed width-agnostically so >999 batches still work.
+_BATCH_NUM_RE = re.compile(r"^batch_(\d+)\.txt$")
+# Serialises appends to the shared log file when running batches in parallel.
+_LOG_LOCK = threading.Lock()
 
-# === Config ===
-# Validate input modes
-if not args.acc_list_file and not args.input_dir:
-    raise ValueError("Either --acc_list_file (CSV mode) or --input_dir (directory mode) must be specified.")
-if args.acc_list_file and args.input_dir:
-    raise ValueError("Cannot specify both --acc_list_file and --input_dir. Choose one input mode.")
 
-# --batch-make requires CSV mode (directory mode already has existing batch files)
-if args.batch_make and not args.acc_list_file:
-    raise ValueError("--batch-make requires -a/--acc_list_file (CSV mode). "
-                     "Directory mode already has pre-made batch files.")
+def batch_str(num: int) -> str:
+    """Zero-padded batch label (>= 3 digits)."""
+    return str(num).zfill(3)
 
-# Args required for full run but not for --batch-make
-if not args.batch_make:
-    if not args.log_file:
-        raise ValueError("-l/--log_file is required unless --batch-make is used.")
-    if not args.pipeline:
-        raise ValueError("-p/--pipeline is required unless --batch-make is used.")
 
-input_mode = "csv" if args.acc_list_file else "directory"
-acc_list_file = args.acc_list_file
-input_dir = args.input_dir
-batch_size = args.batch_size
-output_dir = args.output_dir
-os.makedirs(output_dir, exist_ok=True)
-log_file = args.log_file
-if log_file is None and not args.batch_make:
-    parser.error("-l/--log_file is required when not using --batch-make.")
-constant_filemap = args.file_map
-pipeline = args.pipeline
-if pipeline is None and not args.batch_make:
-    parser.error("-p/--pipeline is required when not using --batch-make.")
-max_workers = args.max_workers
-run_name_prefix = args.run_name_prefix
-request_cores = args.request_cores
-request_mem = args.request_mem
-request_hours = args.request_hours
-wait_time = args.wait_time
-execution_mode = args.execution_mode
-amplicon = args.amplicon           # None → auto-detect; "16S"/"18S"/"ITS"/"CO1" → forced
-conda_prefix = args.conda_prefix   # None → Snakemake default
+# ── Config ────────────────────────────────────────────────────────────────────
 
-# === Early validation =========================================================
-if not args.batch_make:
-    if os.path.isdir(log_file):
-        raise ValueError(f"--log_file must be a file path, not a directory: {log_file}")
-    if not os.path.exists(pipeline):
-        raise ValueError(f"Pipeline script not found: {pipeline}")
-if input_mode == "csv" and not os.path.exists(acc_list_file):
-    raise ValueError(f"Accession list file not found: {acc_list_file}")
-if input_mode == "directory" and not os.path.exists(input_dir):
-    raise ValueError(f"Input directory not found: {input_dir}")
-if not os.path.exists(constant_filemap):
-    raise ValueError(f"File map not found: {constant_filemap}")
+@dataclass
+class Config:
+    input_mode: str
+    acc_list_file: str
+    input_dir: str
+    batch_size: int
+    output_dir: str
+    log_file: str
+    file_map: str
+    pipeline: str
+    max_workers: int
+    run_name_prefix: str
+    request_cores: int
+    request_mem: int
+    request_hours: int
+    wait_time: int
+    execution_mode: str
+    amplicon: str
+    conda_prefix: str
+    randomize: bool
+    random_seed: int
+    start_batch: int
+    end_batch: int
+    batch_make: bool
 
-if not args.batch_make:
-    print(f"Input mode: {input_mode.upper()}")
-    print(f"Execution mode: {execution_mode.upper()}")
-    if amplicon:
-        print(f"Amplicon filter: {amplicon} (forced)")
-    else:
-        print("Amplicon: auto-detect per sample")
-    if execution_mode == "local":
-        print("Running batches locally for testing...")
-    else:
-        print("Running batches on cluster using mqsub...")
+    # ── derived paths (single source of truth, fixes scattered string-building) ──
+    def run_name(self, bstr: str) -> str:
+        return f"{self.run_name_prefix}_batch_{bstr}"
 
-    # Write log header now that validation has passed
-    with open(log_file, "a") as logf:
-        logf.write(f"\n[{datetime.now().isoformat()}] === Starting batch Wagtail processing ===\n")
-        logf.write(f"Input mode: {input_mode.upper()}\n")
-        logf.write(f"Execution mode: {execution_mode.upper()}\n")
-        logf.write(f"Amplicon: {amplicon if amplicon else 'auto-detect'}\n")
-        if conda_prefix:
-            logf.write(f"Conda prefix: {conda_prefix}\n")
-        if input_mode == "csv":
-            logf.write(f"Accession list: {acc_list_file}\n")
-            logf.write(f"Batch size: {batch_size}\n")
-            logf.write(f"Randomize: {args.randomize}\n")
-            if args.randomize and args.random_seed:
-                logf.write(f"Random seed: {args.random_seed}\n")
-        else:
-            logf.write(f"Input directory: {input_dir}\n")
-        logf.write(f"Output directory: {output_dir}\n")
-        logf.write(f"Pipeline: {pipeline}\n")
-        if execution_mode == "cluster":
-            logf.write(f"Cluster resources: {request_cores} cores, {request_mem}GB RAM, {request_hours}h\n")
+    def batch_file(self, bstr: str) -> str:
+        return os.path.join(self.output_dir, f"batch_{bstr}.txt")
 
-# === Step 1: Process input based on mode ===
-if input_mode == "csv":
-    # CSV input mode - read accessions and create batches
-    print(f"Reading accession list: {acc_list_file}")
-    with open(acc_list_file, "r") as f:
-        accs = [line.strip() for line in f if line.strip()]
+    def config_file(self, bstr: str) -> str:
+        return os.path.join(self.output_dir, f"config_batch_{bstr}.yaml")
 
-    total_acc = len(accs)
-    total_batches = math.ceil(total_acc / batch_size)
-    print(f"Found {total_acc} accessions, will make {total_batches} batches "
-          f"(each {batch_size}, last batch might be less).")
+    def status_file(self, bstr: str) -> str:
+        return os.path.join(self.output_dir, f"batch_{bstr}_run_status.txt")
 
-    if args.randomize:
-        print("Randomizing accessions to balance batch sizes...")
-        if args.random_seed is not None:
-            random.seed(args.random_seed)
-            print(f"Using random seed: {args.random_seed}")
-        random.shuffle(accs)
-        print("Accessions randomized.")
-    else:
-        print("Using original order (no randomization).")
+    def cleanup_done(self, bstr: str) -> str:
+        """Path to the pipeline's completion sentinel for this batch's run."""
+        wagtail_root = os.path.dirname(os.path.abspath(self.pipeline))
+        return os.path.join(wagtail_root, "run", self.run_name(bstr),
+                            "0_logs_wagtail", "cleanup_done.txt")
 
-    # Build batch_info — reuse the same slice logic as make_batches()
-    batch_info = {}
-    for i in range(total_batches):
-        batch_num  = i + 1
-        start_idx  = i * batch_size
-        end_idx    = min((i + 1) * batch_size, total_acc)
-        batch_info[batch_num] = {
-            'accessions': accs[start_idx:end_idx],
-            'batch_str': str(batch_num).zfill(3),
-            'mode': 'csv'
-        }
 
-else:
-    # Directory input mode - find existing batch files
-    print(f"Scanning directory for batch files: {input_dir}")
-    batch_files = glob.glob(os.path.join(input_dir, "batch_*.txt"))
-    batch_files.sort()
-    
-    if not batch_files:
-        raise ValueError(f"No batch_*.txt files found in {input_dir}")
-    
-    # Create batch info for directory mode
-    batch_info = {}
-    for batch_file in batch_files:
-        basename = os.path.basename(batch_file)
-        if basename.startswith("batch_") and basename.endswith(".txt"):
-            try:
-                batch_str = basename[6:9]  # Extract the 3-digit number
-                batch_num = int(batch_str)
-                batch_info[batch_num] = {
-                    'file': batch_file,
-                    'batch_str': batch_str,
-                    'mode': 'directory'
-                }
-            except ValueError:
-                print(f"Warning: Could not extract batch number from {basename}")
-                continue
-    
-    if not batch_info:
-        raise ValueError(f"No valid batch files found in {input_dir}")
-    
-    total_batches = max(batch_info.keys())
-    print(f"Found {len(batch_info)} batch files, highest batch number: {total_batches}")
+# ── Argument parsing & validation ─────────────────────────────────────────────
 
-# === Batch range selection ===
-start_batch = args.start_batch
-end_batch = args.end_batch if args.end_batch is not None else total_batches
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Batch run Wagtail pipeline.")
+    parser.add_argument("-a", "--acc_list_file", help="Path to the accession list file (for CSV input mode).")
+    parser.add_argument("-i", "--input_dir", help="Directory containing batch_*.txt files (for directory input mode).")
+    parser.add_argument("-b", "--batch_size", type=int, default=5000, help="Number of accessions per batch (only for CSV input mode).")
+    parser.add_argument("-o", "--output_dir", required=True, help="Directory to save batch configs and logs.")
+    parser.add_argument("-l", "--log_file", default=None, help="Path to the log file. Required unless --batch-make is used.")
+    parser.add_argument("-f", "--file_map", required=True, help="Path to the file map.")
+    parser.add_argument("-p", "--pipeline", default=None, help="Path to the Wagtail wrapper (wagtail.py). Required unless --batch-make is used.")
+    parser.add_argument("-w", "--max_workers", type=int, default=1, help="Maximum number of parallel workers.")
+    parser.add_argument("-r", "--run_name_prefix", required=True, help="Prefix for the run name in the batch configuration.")
+    parser.add_argument("-c", "--request_cores", type=int, default=4, help="Number of cores to request per batch job.")
+    parser.add_argument("-m", "--request_mem", type=int, default=8, help="Memory (GB) to request per batch job.")
+    parser.add_argument("-t", "--request_hours", type=int, default=48, help="Number of hours to request per batch job.")
+    parser.add_argument("--start-batch", type=int, default=1, help="Batch number to start from (inclusive, default: 1).")
+    parser.add_argument("--end-batch", type=int, default=None, help="Batch number to end at (inclusive, default: last batch).")
+    parser.add_argument("--wait-time", type=int, default=30, help="Time to wait between job status checks (seconds).")
+    parser.add_argument("--execution-mode", choices=["local", "cluster"], default="local", help="Execution mode: 'local' for local execution, 'cluster' for mqsub.")
+    parser.add_argument("--randomize", action="store_true", help="Randomize accessions before batching to balance sample sizes (only for CSV input mode).")
+    parser.add_argument("--random-seed", type=int, default=None, help="Random seed for reproducible randomization.")
+    parser.add_argument("--amplicon", choices=["16S", "18S", "ITS", "CO1"], default=None,
+                        help="Force all batches to a specific amplicon type, skipping auto-detection. "
+                             "Omit to auto-detect per sample (default).")
+    parser.add_argument("--conda-prefix", default=None,
+                        help="Path to the shared conda environment prefix directory "
+                             "(passed to Snakemake as --conda-prefix).")
+    parser.add_argument("--batch-make", action="store_true",
+                        help="Only create batch sample files and config files, then exit. "
+                             "Does not run the pipeline. Requires -a (CSV mode) and -r. "
+                             "Prints ready-to-use Snakemake commands for each batch.")
+    return parser
 
-if start_batch < 1 or start_batch > total_batches:
-    raise ValueError(f"--start-batch must be between 1 and {total_batches}")
-if end_batch < start_batch or end_batch > total_batches:
-    raise ValueError(f"--end-batch must be between {start_batch} and {total_batches}")
 
-# === make_batches(): split CSV → batch files + config files, print commands ===
-def make_batches(accs, batch_size, output_dir, run_name_prefix,
-                 constant_filemap, amplicon, pipeline,
-                 randomize=False, random_seed=None):
-    """Create batch sample files and config files without running anything.
+def config_from_args(args, parser) -> Config:
+    """Validate args (single pass, no duplicated checks) and build a Config."""
+    # Input mode
+    if not args.acc_list_file and not args.input_dir:
+        parser.error("Either -a/--acc_list_file (CSV mode) or -i/--input_dir (directory mode) must be specified.")
+    if args.acc_list_file and args.input_dir:
+        parser.error("Cannot specify both -a/--acc_list_file and -i/--input_dir. Choose one input mode.")
 
-    Prints a ready-to-paste Snakemake command for each batch so the caller
-    can open one tmux window per batch and run them independently — avoiding
-    the 48-hour manager-job wall-time problem entirely.
-    """
-    if randomize:
-        if random_seed is not None:
-            random.seed(random_seed)
-            print(f"Randomizing with seed {random_seed}...")
+    # --batch-make requires CSV mode
+    if args.batch_make and not args.acc_list_file:
+        parser.error("--batch-make requires -a/--acc_list_file (CSV mode); directory mode already has pre-made batch files.")
+
+    # Args required for a real run but not for --batch-make
+    if not args.batch_make:
+        if not args.log_file:
+            parser.error("-l/--log_file is required unless --batch-make is used.")
+        if not args.pipeline:
+            parser.error("-p/--pipeline is required unless --batch-make is used.")
+        if os.path.isdir(args.log_file):
+            parser.error(f"--log_file must be a file path, not a directory: {args.log_file}")
+        if not os.path.exists(args.pipeline):
+            parser.error(f"Pipeline script not found: {args.pipeline}")
+
+    input_mode = "csv" if args.acc_list_file else "directory"
+    if input_mode == "csv" and not os.path.exists(args.acc_list_file):
+        parser.error(f"Accession list file not found: {args.acc_list_file}")
+    if input_mode == "directory" and not os.path.exists(args.input_dir):
+        parser.error(f"Input directory not found: {args.input_dir}")
+    if not os.path.exists(args.file_map):
+        parser.error(f"File map not found: {args.file_map}")
+
+    return Config(
+        input_mode=input_mode,
+        acc_list_file=args.acc_list_file,
+        input_dir=args.input_dir,
+        batch_size=args.batch_size,
+        output_dir=args.output_dir,
+        log_file=args.log_file,
+        file_map=args.file_map,
+        pipeline=args.pipeline,
+        max_workers=args.max_workers,
+        run_name_prefix=args.run_name_prefix,
+        request_cores=args.request_cores,
+        request_mem=args.request_mem,
+        request_hours=args.request_hours,
+        wait_time=args.wait_time,
+        execution_mode=args.execution_mode,
+        amplicon=args.amplicon,
+        conda_prefix=args.conda_prefix,
+        randomize=args.randomize,
+        random_seed=args.random_seed,
+        start_batch=args.start_batch,
+        end_batch=args.end_batch,
+        batch_make=args.batch_make,
+    )
+
+
+# ── Small IO helpers ──────────────────────────────────────────────────────────
+
+def log_event(cfg: Config, msg: str) -> None:
+    """Timestamped, thread-safe append to the shared log file."""
+    with _LOG_LOCK:
+        with open(cfg.log_file, "a") as logf:
+            logf.write(f"[{datetime.now().isoformat()}] {msg}\n")
+
+
+def write_text_if_changed(path: str, content: str) -> bool:
+    """Write *content* to *path*. If the file exists with different content,
+    warn (stale batch/config from changed inputs) and overwrite. Returns True
+    if the file was (re)written, False if it was already up to date."""
+    if os.path.exists(path):
+        with open(path) as fh:
+            if fh.read() == content:
+                return False
+        print(f"  WARNING: overwriting {os.path.basename(path)} — content changed since last run.")
+    with open(path, "w") as fh:
+        fh.write(content)
+    return True
+
+
+def batch_config_yaml(cfg: Config, bstr: str, sample_file: str) -> str:
+    """Render the per-batch config.yaml (single source of truth — used by both
+    --batch-make and the live run path)."""
+    text = (f"run_name: {cfg.run_name(bstr)}\n"
+            f"sample_list: {sample_file}\n"
+            f"file_map: {cfg.file_map}\n")
+    if cfg.amplicon:
+        text += f"amplicon: {cfg.amplicon}\n"
+    return text
+
+
+def read_accessions(path: str) -> list:
+    with open(path, "r") as fh:
+        return [line.strip() for line in fh if line.strip()]
+
+
+def parse_batch_number(basename: str):
+    """Return the integer batch number from 'batch_<n>.txt', or None.
+    Width-agnostic, so >999 batches parse correctly."""
+    m = _BATCH_NUM_RE.match(basename)
+    return int(m.group(1)) if m else None
+
+
+# ── Cluster job polling ───────────────────────────────────────────────────────
+
+def check_job_status(job_id: str) -> str:
+    """'running' while qstat still knows the job, 'finished' once it leaves the
+    queue, 'unknown' if qstat itself errored."""
+    try:
+        result = subprocess.run(["qstat", "-j", str(job_id)],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        return "running" if result.returncode == 0 else "finished"
+    except Exception as e:
+        print(f"Error checking job status: {e}")
+        return "unknown"
+
+
+def wait_for_job(job_id: str, bstr: str, wait_time: int, max_unknown: int = 5) -> None:
+    """Block until the job leaves the queue. Transient 'unknown' qstat results
+    are retried (bounded) rather than treated as completion, so a hiccup no
+    longer makes us declare the batch done prematurely."""
+    print(f"Waiting for batch {bstr} job {job_id} to complete...")
+    unknown = 0
+    while True:
+        status = check_job_status(job_id)
+        if status == "finished":
+            print(f"Batch {bstr} job {job_id} has left the queue.")
+            return
+        if status == "running":
+            unknown = 0
+            print(f"Batch {bstr} job {job_id} still running, waiting {wait_time}s...")
+            time.sleep(wait_time)
+            continue
+        # unknown
+        unknown += 1
+        if unknown >= max_unknown:
+            print(f"Batch {bstr} job {job_id} status unknown {unknown}x; stopping wait "
+                  f"(completion will be decided by cleanup_done.txt).")
+            return
+        print(f"Batch {bstr} job {job_id} status unknown, retrying in {wait_time}s...")
+        time.sleep(wait_time)
+
+
+def parse_job_id(stdout: str):
+    """Best-effort job ID from mqsub stdout. Completion no longer depends on
+    this (cleanup_done.txt is authoritative), so a miss only affects whether we
+    actively poll vs. fall back to a timed wait."""
+    for line in stdout.splitlines():
+        m = re.search(r"\b(\d{4,})\b", line)
+        if m:
+            return m.group(1)
+    return None
+
+
+# ── make_batches (--batch-make) ───────────────────────────────────────────────
+
+def make_batches(cfg: Config, accs: list) -> list:
+    """Create batch sample files + config files without running anything, and
+    print a ready-to-paste Snakemake command per batch."""
+    if cfg.randomize:
+        if cfg.random_seed is not None:
+            random.seed(cfg.random_seed)
+            print(f"Randomizing with seed {cfg.random_seed}...")
         else:
             print("Randomizing accessions (no seed — not reproducible)...")
         random.shuffle(accs)
 
-    total_acc    = len(accs)
-    total_batches = math.ceil(total_acc / batch_size)
-
+    total_acc = len(accs)
+    total_batches = math.ceil(total_acc / cfg.batch_size)
     print(f"\nSplitting {total_acc} accessions into {total_batches} batch(es) "
-          f"of up to {batch_size} each.\n")
+          f"of up to {cfg.batch_size} each.\n")
 
     created = []   # (batch_num, batch_str, batch_file, config_file, n_samples)
-
     for i in range(total_batches):
-        batch_num  = i + 1
-        batch_str  = str(batch_num).zfill(3)
-        start_idx  = i * batch_size
-        end_idx    = min((i + 1) * batch_size, total_acc)
-        batch_accs = accs[start_idx:end_idx]
+        bnum = i + 1
+        bstr = batch_str(bnum)
+        batch_accs = accs[i * cfg.batch_size:(i + 1) * cfg.batch_size]
 
-        batch_file  = os.path.join(output_dir, f"batch_{batch_str}.txt")
-        config_file = os.path.join(output_dir, f"config_batch_{batch_str}.yaml")
+        sample_file = cfg.batch_file(bstr)
+        config_file = cfg.config_file(bstr)
+        write_text_if_changed(sample_file, "\n".join(batch_accs) + "\n")
+        write_text_if_changed(config_file, batch_config_yaml(cfg, bstr, sample_file))
 
-        # Write sample list
-        if not os.path.exists(batch_file):
-            with open(batch_file, "w") as f:
-                f.write("\n".join(batch_accs) + "\n")
+        created.append((bnum, bstr, sample_file, config_file, len(batch_accs)))
+        print(f"  Batch {bstr}: {len(batch_accs):>5} samples  →  {os.path.basename(config_file)}")
 
-        # Write config
-        if not os.path.exists(config_file):
-            with open(config_file, "w") as cf:
-                cf.write(f"run_name: {run_name_prefix}_batch_{batch_str}\n")
-                cf.write(f"sample_list: {batch_file}\n")
-                cf.write(f"file_map: {constant_filemap}\n")
-                if amplicon:
-                    cf.write(f"amplicon: {amplicon}\n")
-
-        created.append((batch_num, batch_str, batch_file, config_file, len(batch_accs)))
-        print(f"  Batch {batch_str}: {len(batch_accs):>5} samples  "
-              f"→  {os.path.basename(config_file)}")
-
-    # Print ready-to-use Snakemake commands
-    smk = pipeline if pipeline else "pipeline/wagtail.smk"
-    conda_flag = f" --conda-prefix {args.conda_prefix}" if args.conda_prefix else ""
-
+    smk = cfg.pipeline if cfg.pipeline else "pipeline/wagtail.smk"
+    conda_flag = f" --conda-prefix {cfg.conda_prefix}" if cfg.conda_prefix else ""
     print(f"\n{'─'*70}")
     print("Run each batch in a separate tmux window:\n")
-    for _, batch_str, _, config_file, _ in created:
-        print(f"  # Batch {batch_str}")
+    for _, bstr, _, config_file, _ in created:
+        print(f"  # Batch {bstr}")
         print(f"  snakemake -s {smk} \\")
         print(f"    --configfile {config_file} \\")
         print(f"    --profile aqua --jobs 50 \\")
         print(f"    --keep-going --rerun-incomplete \\")
         print(f"    --use-conda{conda_flag}")
         print()
-
     print(f"{'─'*70}")
-    print(f"Total: {total_batches} batch file(s) written to {output_dir}\n")
+    print(f"Total: {total_batches} batch file(s) written to {cfg.output_dir}\n")
     return created
 
 
-# === Early exit for --batch-make mode ===
-if args.batch_make:
-    os.makedirs(output_dir, exist_ok=True)
-    print(f"Reading accession list: {acc_list_file}")
-    with open(acc_list_file, "r") as f:
-        accs = [line.strip() for line in f if line.strip()]
-    make_batches(
-        accs           = accs,
-        batch_size     = batch_size,
-        output_dir     = output_dir,
-        run_name_prefix= run_name_prefix,
-        constant_filemap= constant_filemap,
-        amplicon       = amplicon,
-        pipeline       = args.pipeline,
-        randomize      = args.randomize,
-        random_seed    = args.random_seed,
-    )
-    raise SystemExit(0)
+# ── run a single batch ────────────────────────────────────────────────────────
 
-
-# === Helper functions ===
-def check_job_status(job_id):
-    """Check the status of a job using qstat."""
-    try:
-        result = subprocess.run(["qstat", "-j", str(job_id)], 
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        if result.returncode == 0:
-            return "running"
-        else:
-            return "finished"
-    except Exception as e:
-        print(f"Error checking job status: {e}")
-        return "unknown"
-
-def wait_for_job(job_id, batch_str, wait_time):
-    """Wait for a job to complete."""
-    print(f"Waiting for batch {batch_str} job {job_id} to complete...")
-    while True:
-        status = check_job_status(job_id)
-        if status == "finished":
-            print(f"Batch {batch_str} job {job_id} has completed.")
-            break
-        elif status == "running":
-            print(f"Batch {batch_str} job {job_id} is still running, waiting {wait_time} seconds...")
-            time.sleep(wait_time)
-        else:
-            print(f"Batch {batch_str} job {job_id} status unknown, assuming finished.")
-            break
-
-# === Function to process 1 batch ===
-def run_batch(batch_num, batch_data):
-    """Process a single batch by creating config files and running either locally or on cluster."""
-    batch_str = str(batch_num).zfill(3)
-    batch_acc_filename = os.path.join(output_dir, f"batch_{batch_str}.txt")
-    config_filename = os.path.join(output_dir, f"config_batch_{batch_str}.yaml")
-    run_status_filename = os.path.join(output_dir, f"batch_{batch_str}_run_status.txt")
-
-    # Handle different input modes
-    if batch_data['mode'] == 'csv':
-        batch_accs = batch_data['accessions']
-        # Create batch file if it doesn't exist
-        if not os.path.exists(batch_acc_filename):
-            with open(batch_acc_filename, "w") as f:
-                for acc in batch_accs:
-                    f.write(acc + "\n")
-    else:  # directory mode
-        batch_acc_filename = batch_data['file']  # Use existing file
-        with open(batch_acc_filename, "r") as f:
-            batch_accs = [line.strip() for line in f if line.strip()]
-
-    # Create config file if it doesn't exist
-    if not os.path.exists(config_filename):
-        with open(config_filename, "w") as cf:
-            cf.write(f"run_name: {run_name_prefix}_batch_{batch_str}\n")
-            cf.write(f"sample_list: {batch_acc_filename}\n")
-            cf.write(f"file_map: {constant_filemap}\n")
-            if amplicon:
-                cf.write(f"amplicon: {amplicon}\n")
-    
-    # Log that the batch is starting
-    with open(log_file, "a") as logf:
-        logf.write(f"[{datetime.now().isoformat()}] Batch {batch_str} STARTED: {len(batch_accs)} accessions, config: {config_filename}\n")
-
-    # Build the base wagtail command shared by both execution modes.
-    # amplicon is written to the config file above, so Snakemake picks it up
-    # via config.get("amplicon", "all") without needing an extra CLI flag.
-    _base_cmd = [
-        "python", pipeline,
+def base_command(cfg: Config, config_file: str) -> list:
+    """The wagtail/snakemake command shared by both execution modes."""
+    cmd = [
+        "python", cfg.pipeline,
         "--profile", "aqua",
-        "--configfile", config_filename,
+        "--configfile", config_file,
         "--keep-going",
         "--conda-frontend", "mamba",
         "--rerun-incomplete",
         "--use-conda",
     ]
-    if conda_prefix:
-        _base_cmd += ["--conda-prefix", conda_prefix]
+    if cfg.conda_prefix:
+        cmd += ["--conda-prefix", cfg.conda_prefix]
+    return cmd
 
-    if execution_mode == "local":
-        # Local execution mode
-        wagtail_cmd = _base_cmd + [
+
+def run_batch(cfg: Config, batch_num: int, batch_data: dict):
+    """Create the per-batch config and run it locally or submit it to the cluster.
+    Returns (batch_num, status_string)."""
+    bstr = batch_str(batch_num)
+    config_file = cfg.config_file(bstr)
+    status_file = cfg.status_file(bstr)
+
+    # Resolve the sample list for this batch.
+    if batch_data["mode"] == "csv":
+        sample_file = cfg.batch_file(bstr)
+        write_text_if_changed(sample_file, "\n".join(batch_data["accessions"]) + "\n")
+        n_samples = len(batch_data["accessions"])
+    else:  # directory mode — use the existing batch file as-is
+        sample_file = batch_data["file"]
+        n_samples = len(read_accessions(sample_file))
+
+    write_text_if_changed(config_file, batch_config_yaml(cfg, bstr, sample_file))
+    log_event(cfg, f"Batch {bstr} STARTED: {n_samples} accessions, config: {config_file}")
+
+    base = base_command(cfg, config_file)
+
+    if cfg.execution_mode == "local":
+        wagtail_cmd = base + [
             "--jobs", "50",
-            "--local-cores", str(request_cores),
-            "--cores", str(request_cores * 4),
+            "--local-cores", str(cfg.request_cores),
+            "--cores", str(cfg.request_cores * 4),
             "--group-components", "wagtail=160",
         ]
-        
-        # Write a checkpoint file before running
-        with open(run_status_filename, "w") as status_file:
-            status_file.write("STARTED\n")
-        
+        with open(status_file, "w") as sf:
+            sf.write("STARTED\n")
         try:
-            # Log command execution
-            with open(log_file, "a") as logf:
-                logf.write(f"[{datetime.now().isoformat()}] Batch {batch_str} RUNNING LOCALLY: {' '.join(wagtail_cmd)}\n")
-            
-            print(f"Running batch {batch_str} locally...")
-            
-            # Run the job locally
+            log_event(cfg, f"Batch {bstr} RUNNING LOCALLY: {' '.join(wagtail_cmd)}")
+            print(f"Running batch {bstr} locally...")
             result = subprocess.run(wagtail_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            
-            # Log the output
-            with open(run_status_filename, "a") as status_file:
-                status_file.write(f"STDOUT:\n{result.stdout}\n")
-                status_file.write(f"STDERR:\n{result.stderr}\n")
-                status_file.write(f"EXITCODE={result.returncode}\n")
-            
+            with open(status_file, "a") as sf:
+                sf.write(f"STDOUT:\n{result.stdout}\n")
+                sf.write(f"STDERR:\n{result.stderr}\n")
+                sf.write(f"EXITCODE={result.returncode}\n")
             if result.returncode == 0:
                 status = "COMPLETED successfully"
-                with open(run_status_filename, "a") as status_file:
-                    status_file.write(f"COMPLETED\n")
+                with open(status_file, "a") as sf:
+                    sf.write("COMPLETED\n")
             else:
                 status = f"FAILED with return code {result.returncode}"
-                with open(run_status_filename, "a") as status_file:
-                    status_file.write(f"FAILED\n")
-        
+                with open(status_file, "a") as sf:
+                    sf.write("FAILED\n")
         except Exception as e:
-            status = f"FAILED with exception: {str(e)}"
-            with open(run_status_filename, "a") as status_file:
-                status_file.write(f"EXCEPTION: {str(e)}\nEXITCODE=1\n")
+            status = f"FAILED with exception: {e}"
+            with open(status_file, "a") as sf:
+                sf.write(f"EXCEPTION: {e}\nEXITCODE=1\n")
 
-    else:
-        # Cluster execution mode (mqsub)
-        wagtail_cmd = _base_cmd + [
+    else:  # cluster (mqsub)
+        wagtail_cmd = base + [
             "--jobs", "50",
-            "--local-cores", str(request_cores),
-            "--cores", str(request_cores * 4),
+            "--local-cores", str(cfg.request_cores),
+            "--cores", str(cfg.request_cores * 4),
             "--group-components", "wagtail=50",
             "--retries", "3",
         ]
-
         cmd = [
             "mqsub",
-            "-t", str(request_cores),
-            "-m", str(request_mem),
-            "--hours", str(request_hours),
+            "-t", str(cfg.request_cores),
+            "-m", str(cfg.request_mem),
+            "--hours", str(cfg.request_hours),
             "--no-email",
-            "--"
+            "--",
         ] + wagtail_cmd
 
-        # Write a checkpoint file before running
-        with open(run_status_filename, "w") as status_file:
-            status_file.write("STARTED\n")
+        with open(status_file, "w") as sf:
+            sf.write("STARTED\n")
         status = "SUBMITTED to cluster"
         try:
-            # Log command execution
-            with open(log_file, "a") as logf:
-                logf.write(f"[{datetime.now().isoformat()}] Batch {batch_str} SUBMITTING TO CLUSTER: {' '.join(cmd)}\n")
-            
-            print(f"Submitting batch {batch_str} to cluster...")
-            
-            # Submit the job
+            log_event(cfg, f"Batch {bstr} SUBMITTING TO CLUSTER: {' '.join(cmd)}")
+            print(f"Submitting batch {bstr} to cluster...")
             result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            
-            # Log the mqsub output for debugging
-            with open(run_status_filename, "a") as status_file:
-                status_file.write(f"MQSUB_STDOUT:\n{result.stdout}\n")
-                status_file.write(f"MQSUB_STDERR:\n{result.stderr}\n")
-                status_file.write(f"MQSUB_EXITCODE={result.returncode}\n")
-            
-            if result.returncode == 0:
-                # Job submitted successfully — parse the job ID from mqsub stdout
-                # so we can poll qstat instead of guessing at output files.
-                job_id = None
-                for line in result.stdout.splitlines():
-                    m = re.search(r'\b(\d{4,})\b', line)  # job IDs are typically 4+ digits
-                    if m:
-                        job_id = m.group(1)
-                        break
+            with open(status_file, "a") as sf:
+                sf.write(f"MQSUB_STDOUT:\n{result.stdout}\n")
+                sf.write(f"MQSUB_STDERR:\n{result.stderr}\n")
+                sf.write(f"MQSUB_EXITCODE={result.returncode}\n")
 
-                with open(log_file, "a") as logf:
-                    logf.write(f"[{datetime.now().isoformat()}] Batch {batch_str} SUBMITTED TO CLUSTER"
-                               f"{' job_id=' + job_id if job_id else ''}\n")
-
-                if job_id:
-                    print(f"Batch {batch_str} submitted (job {job_id}), waiting for completion...")
-                    wait_for_job(job_id, batch_str, wait_time)
-                    status = "COMPLETED (cluster job left queue)"
-                    with open(run_status_filename, "a") as status_file:
-                        status_file.write(f"COMPLETED\nEXITCODE=0\n")
-                else:
-                    # mqsub output did not contain a parseable job ID —
-                    # fall back to a simple timed wait, then move on.
-                    print(f"Batch {batch_str} submitted (no job ID parsed from mqsub output); "
-                          f"waiting {wait_time}s then continuing...")
-                    with open(log_file, "a") as logf:
-                        logf.write(f"[{datetime.now().isoformat()}] Batch {batch_str} WARNING: "
-                                   f"could not parse job ID from mqsub stdout: {result.stdout!r}\n")
-                    time.sleep(wait_time)
-                    status = "SUBMITTED (job ID unknown — not waited)"
-                    with open(run_status_filename, "a") as status_file:
-                        status_file.write(f"SUBMITTED\nEXITCODE=0\n")
+            if result.returncode != 0:
+                status = f"FAILED submit (return code {result.returncode})"
+                with open(status_file, "a") as sf:
+                    sf.write(f"SUBMIT_FAILED\nEXITCODE={result.returncode}\n")
             else:
-                status = f"FAILED pipeline (return code {result.returncode})"
-                with open(run_status_filename, "a") as status_file:
-                    status_file.write(f"SUBMIT_FAILED\nEXITCODE={result.returncode}\n")
-        
-        except Exception as e:
-            status = f"FAILED with exception: {str(e)}"
-            with open(run_status_filename, "a") as status_file:
-                status_file.write(f"EXCEPTION: {str(e)}\nEXITCODE=1\n")
+                job_id = parse_job_id(result.stdout)
+                log_event(cfg, f"Batch {bstr} SUBMITTED TO CLUSTER"
+                               f"{' job_id=' + job_id if job_id else ''}")
+                if job_id:
+                    print(f"Batch {bstr} submitted (job {job_id}), waiting for completion...")
+                    wait_for_job(job_id, bstr, cfg.wait_time)
+                else:
+                    print(f"Batch {bstr} submitted (no job ID parsed); waiting {cfg.wait_time}s...")
+                    log_event(cfg, f"Batch {bstr} WARNING: could not parse job ID from "
+                                   f"mqsub stdout: {result.stdout!r}")
+                    time.sleep(cfg.wait_time)
 
-    # Final log entry
-    with open(log_file, "a") as logf:
-        logf.write(f"[{datetime.now().isoformat()}] Batch {batch_str} {status}\n")
-    
+                # Completion is decided by the pipeline's cleanup_done.txt, NOT by
+                # the queue-exit: mqsub returns 0 on submission and qstat only says
+                # the job left the queue. No sentinel → not finished → rerun later
+                # (EXITCODE=2 so Step 2 reruns it rather than skipping).
+                if os.path.exists(cfg.cleanup_done(bstr)):
+                    status = "COMPLETED (cleanup_done present)"
+                    with open(status_file, "a") as sf:
+                        sf.write("COMPLETED\nEXITCODE=0\n")
+                else:
+                    status = "INCOMPLETE (no cleanup_done — will rerun)"
+                    with open(status_file, "a") as sf:
+                        sf.write("INCOMPLETE\nEXITCODE=2\n")
+        except Exception as e:
+            status = f"FAILED with exception: {e}"
+            with open(status_file, "a") as sf:
+                sf.write(f"EXCEPTION: {e}\nEXITCODE=1\n")
+
+    log_event(cfg, f"Batch {bstr} {status}")
     return batch_num, status
 
-# === Step 2: Check which batches need to be run ===
-batches_to_run = []
 
-for batch_num in range(start_batch, end_batch + 1):
-    if batch_num not in batch_info:
-        print(f"Warning: Batch {batch_num:03d} not found, skipping.")
-        continue
-        
-    batch_str = str(batch_num).zfill(3)
-    run_status_filename = os.path.join(output_dir, f"batch_{batch_str}_run_status.txt")
-    
-    skip = False
-    rerun = False
+# ── Build the batch_info map for a run ────────────────────────────────────────
 
-    if os.path.exists(run_status_filename):
-        with open(run_status_filename) as sf:
-            lines = sf.readlines()
-            exitcodes = [line for line in lines if line.startswith("EXITCODE=")]
+def build_batch_info(cfg: Config):
+    """Return (batch_info, total_batches). CSV mode slices the accession list;
+    directory mode discovers existing batch_*.txt files."""
+    if cfg.input_mode == "csv":
+        print(f"Reading accession list: {cfg.acc_list_file}")
+        accs = read_accessions(cfg.acc_list_file)
+        total_acc = len(accs)
+        total_batches = math.ceil(total_acc / cfg.batch_size)
+        print(f"Found {total_acc} accessions, will make {total_batches} batches "
+              f"(each {cfg.batch_size}, last batch might be less).")
+
+        if cfg.randomize:
+            print("Randomizing accessions to balance batch sizes...")
+            if cfg.random_seed is not None:
+                random.seed(cfg.random_seed)
+                print(f"Using random seed: {cfg.random_seed}")
+            random.shuffle(accs)
+            print("Accessions randomized.")
+        else:
+            print("Using original order (no randomization).")
+
+        batch_info = {}
+        for i in range(total_batches):
+            bnum = i + 1
+            batch_info[bnum] = {
+                "accessions": accs[i * cfg.batch_size:(i + 1) * cfg.batch_size],
+                "batch_str": batch_str(bnum),
+                "mode": "csv",
+            }
+        return batch_info, total_batches
+
+    # directory mode
+    print(f"Scanning directory for batch files: {cfg.input_dir}")
+    batch_files = sorted(glob.glob(os.path.join(cfg.input_dir, "batch_*.txt")))
+    if not batch_files:
+        raise ValueError(f"No batch_*.txt files found in {cfg.input_dir}")
+
+    batch_info = {}
+    for batch_file in batch_files:
+        bnum = parse_batch_number(os.path.basename(batch_file))
+        if bnum is None:
+            print(f"Warning: Could not extract batch number from {os.path.basename(batch_file)}")
+            continue
+        batch_info[bnum] = {
+            "file": batch_file,
+            "batch_str": batch_str(bnum),
+            "mode": "directory",
+        }
+    if not batch_info:
+        raise ValueError(f"No valid batch files found in {cfg.input_dir}")
+
+    total_batches = max(batch_info.keys())
+    print(f"Found {len(batch_info)} batch files, highest batch number: {total_batches}")
+    return batch_info, total_batches
+
+
+def select_batches_to_run(cfg: Config, batch_info: dict, start_batch: int, end_batch: int):
+    """Decide which batches still need running. A batch is skipped if its
+    cleanup_done.txt exists (authoritative) or its status file records a
+    terminal EXITCODE (0 = done, 1 = sample-level failure not worth rerunning)."""
+    batches_to_run = []
+    for bnum in range(start_batch, end_batch + 1):
+        if bnum not in batch_info:
+            print(f"Warning: Batch {batch_str(bnum)} not found, skipping.")
+            continue
+        bstr = batch_str(bnum)
+
+        # Authoritative completion signal from the pipeline itself.
+        if os.path.exists(cfg.cleanup_done(bstr)):
+            print(f"Batch {bstr} already completed (cleanup_done present), skipping.")
+            continue
+
+        status_file = cfg.status_file(bstr)
+        skip = False
+        if os.path.exists(status_file):
+            with open(status_file) as sf:
+                exitcodes = [ln for ln in sf if ln.startswith("EXITCODE=")]
             if exitcodes:
                 last_exit = exitcodes[-1].strip().split("=")[-1]
                 if last_exit == "0":
                     skip = True
-                    print(f"Batch {batch_str} already completed (EXITCODE=0), skipping.")
+                    print(f"Batch {bstr} already completed (EXITCODE=0), skipping.")
                 elif last_exit == "1":
                     skip = True
-                    print(f"Batch {batch_str} has EXITCODE=1, skipping rerun (could be sample issues).")
+                    print(f"Batch {bstr} has EXITCODE=1, skipping rerun (likely sample issues).")
                 else:
-                    rerun = True
-                    print(f"Batch {batch_str} has EXITCODE={last_exit}, will rerun.")
+                    print(f"Batch {bstr} has EXITCODE={last_exit}, will rerun.")
             else:
-                rerun = True
-                print(f"Batch {batch_str} has no EXITCODE, will rerun.")
+                print(f"Batch {bstr} has no EXITCODE, will rerun.")
+        else:
+            print(f"Batch {bstr} has no status file, will run.")
+
+        if not skip:
+            batches_to_run.append((bnum, batch_info[bnum]))
+    return batches_to_run
+
+
+# ── Logging the run header ────────────────────────────────────────────────────
+
+def log_run_header(cfg: Config) -> None:
+    print(f"Input mode: {cfg.input_mode.upper()}")
+    print(f"Execution mode: {cfg.execution_mode.upper()}")
+    print(f"Amplicon filter: {cfg.amplicon} (forced)" if cfg.amplicon
+          else "Amplicon: auto-detect per sample")
+    print("Running batches locally for testing..." if cfg.execution_mode == "local"
+          else "Running batches on cluster using mqsub...")
+
+    lines = [
+        f"\n[{datetime.now().isoformat()}] === Starting batch Wagtail processing ===",
+        f"Input mode: {cfg.input_mode.upper()}",
+        f"Execution mode: {cfg.execution_mode.upper()}",
+        f"Amplicon: {cfg.amplicon if cfg.amplicon else 'auto-detect'}",
+    ]
+    if cfg.conda_prefix:
+        lines.append(f"Conda prefix: {cfg.conda_prefix}")
+    if cfg.input_mode == "csv":
+        lines.append(f"Accession list: {cfg.acc_list_file}")
+        lines.append(f"Batch size: {cfg.batch_size}")
+        lines.append(f"Randomize: {cfg.randomize}")
+        if cfg.randomize and cfg.random_seed is not None:
+            lines.append(f"Random seed: {cfg.random_seed}")
     else:
-        rerun = True
-        print(f"Batch {batch_str} has no status file, will run.")
+        lines.append(f"Input directory: {cfg.input_dir}")
+    lines.append(f"Output directory: {cfg.output_dir}")
+    lines.append(f"Pipeline: {cfg.pipeline}")
+    if cfg.execution_mode == "cluster":
+        lines.append(f"Cluster resources: {cfg.request_cores} cores, {cfg.request_mem}GB RAM, {cfg.request_hours}h")
+    with _LOG_LOCK:
+        with open(cfg.log_file, "a") as logf:
+            logf.write("\n".join(lines) + "\n")
 
-    if not skip:
-        batches_to_run.append((batch_num, batch_info[batch_num]))
 
-print(f"\nWill process {len(batches_to_run)} batches out of {len(batch_info)} available batches.")
+# ── main ──────────────────────────────────────────────────────────────────────
 
-# === Step 3: Run batches (sequential to avoid overwhelming the system) ===
-results = []
-finished_batches = 0
+def main(argv=None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    cfg = config_from_args(args, parser)
+    os.makedirs(cfg.output_dir, exist_ok=True)
 
-if batches_to_run:
-    if max_workers > 1:
-        # Parallel execution
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_to_batch = {executor.submit(run_batch, batch_num, batch_data): batch_num for batch_num, batch_data in batches_to_run}
+    # --batch-make: create files + print commands, then exit.
+    if cfg.batch_make:
+        print(f"Reading accession list: {cfg.acc_list_file}")
+        make_batches(cfg, read_accessions(cfg.acc_list_file))
+        return 0
+
+    log_run_header(cfg)
+
+    batch_info, total_batches = build_batch_info(cfg)
+
+    start_batch = cfg.start_batch
+    end_batch = cfg.end_batch if cfg.end_batch is not None else total_batches
+    if start_batch < 1 or start_batch > total_batches:
+        raise ValueError(f"--start-batch must be between 1 and {total_batches}")
+    if end_batch < start_batch or end_batch > total_batches:
+        raise ValueError(f"--end-batch must be between {start_batch} and {total_batches}")
+
+    batches_to_run = select_batches_to_run(cfg, batch_info, start_batch, end_batch)
+    print(f"\nWill process {len(batches_to_run)} batches out of {len(batch_info)} available batches.")
+
+    results = []
+    finished = 0
+    if not batches_to_run:
+        print("No batches to process.")
+        print(f"\nAll batches processing completed.\nCheck log file for details: {cfg.log_file}")
+        return 0
+
+    def record(bn, status):
+        nonlocal finished
+        print(f"Batch {batch_str(bn)}: {status}")
+        results.append((bn, status))
+        finished += 1
+        print(f"Progress: {finished}/{len(batches_to_run)} "
+              f"({finished / len(batches_to_run) * 100:.2f}%)")
+
+    if cfg.max_workers > 1:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=cfg.max_workers) as executor:
+            future_to_batch = {executor.submit(run_batch, cfg, bnum, data): bnum
+                               for bnum, data in batches_to_run}
             for future in concurrent.futures.as_completed(future_to_batch):
-                batch_num = future_to_batch[future]
+                bnum = future_to_batch[future]
                 try:
                     bn, status = future.result()
-                    print(f"Batch {bn:03d}: {status}")
-                    results.append((bn, status))
+                    record(bn, status)
                 except Exception as exc:
-                    print(f"Batch {batch_num:03d} generated an exception: {exc}")
-                    results.append((batch_num, f"EXCEPTION: {exc}"))
-                finished_batches += 1
-                percentage = (finished_batches / len(batches_to_run)) * 100
-                print(f"Progress: {finished_batches}/{len(batches_to_run)} ({percentage:.2f}%)")
+                    record(bnum, f"EXCEPTION: {exc}")
     else:
-        # Sequential execution (recommended for job queue systems)
-        for batch_num, batch_data in batches_to_run:
+        for bnum, data in batches_to_run:
             try:
-                bn, status = run_batch(batch_num, batch_data)
-                print(f"Batch {bn:03d}: {status}")
-                results.append((bn, status))
+                bn, status = run_batch(cfg, bnum, data)
+                record(bn, status)
             except Exception as exc:
-                print(f"Batch {batch_num:03d} generated an exception: {exc}")
-                results.append((batch_num, f"EXCEPTION: {exc}"))
-            finished_batches += 1
-            percentage = (finished_batches / len(batches_to_run)) * 100
-            print(f"Progress: {finished_batches}/{len(batches_to_run)} ({percentage:.2f}%)")
+                record(bnum, f"EXCEPTION: {exc}")
 
     results.sort(key=lambda x: x[0])
     print("\nAll batches finished.")
-else:
-    print("No batches to process.")
+    print(f"\nAll batches processing completed.\nCheck log file for details: {cfg.log_file}")
+    return 0
 
-print("\nAll batches processing completed.")
 
-print("\nAll batches processing completed.")
-print(f"Check log file for details: {log_file}")
+if __name__ == "__main__":
+    raise SystemExit(main())
