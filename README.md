@@ -182,12 +182,25 @@ marker_log → manifest → import_and_qc → deblur
 
 At runtime, `deblur` / `mappy` / `extract_taxonomy` read this file via `bin/resolve_reference.py`, strip the `DB_` prefix (`DB_16S` → `16S`), and glob the database directory for the matching `{marker}_deblur*` / `{marker}_database*` / `{marker}_taxonomy*` file.
 
+`marker_id` also writes a per-run summary table at `0_logs_wagtail/{run_name}_marker_summary.tsv` — one row per sample, tab-separated with a header:
+
+```
+sample      status   amplicon
+SRR0000001  OK       16S
+SRR0000002  FAIL     UNKNOWN
+SRR0000003  OK       ITS
+```
+
+- `status`: `OK` (confident call), `FAIL` (AMBIGUOUS/UNKNOWN/missing marker), or `FORCED` (when `--amplicon` was used).
+- `amplicon`: the predicted marker when `OK`, `UNKNOWN` when `FAIL`, or the forced marker when `FORCED` (in which case every row is `FORCED`). This file is kept after cleanup.
+
 ### Output structure
 
 ```
 run/run_name/
 ├── 0_logs_wagtail/             # Execution logs, benchmarks, and SQLite logs
 │   ├── marker_id_batch.log     # batched marker identification (one per run)
+│   ├── {run_name}_marker_summary.tsv   # sample → status → amplicon table
 │   └── {sample}/
 │       ├── marker_log.log
 │       ├── import_and_qc.log
@@ -208,6 +221,7 @@ Intermediate directories (`1_marker_id/` through `5_taxonomy_wagtail/`) are clea
 ### Key output files
 - `{sample}_condensed.tsv` — taxonomic profile with abundances for one sample
 - `{run_name}_full_metadata.tsv` — combined metadata for all samples in the run
+- `{run_name}_marker_summary.tsv` — sample → status → amplicon table from marker identification
 - `{run_name}_YYYYMMDD_log.sql` — SQLite database with per-sample execution status for every pipeline step
 
 ### Executing Wagtail
@@ -236,8 +250,8 @@ sample001
 sample002
 ```
 
-[!WARNING]
-deblur cannot work with sample name with underscores, make sure to avoid underscores in the sample name
+> [!WARNING]
+> deblur cannot work with sample names that contain underscores, make sure to avoid underscores in the sample name.
 
 **STEP 2: CONFIGURE**
 
@@ -419,6 +433,7 @@ python batch_run_wagtail.py \
 | `--execution-mode local\|cluster` | Run locally or submit via `mqsub` (default local). |
 | `--amplicon 16S\|18S\|ITS\|CO1` | Force all batches to one amplicon (default: auto-detect). |
 | `--conda-prefix DIR` | Shared conda env prefix passed to Snakemake. |
+| `--group-components N` | Max per-sample chains merged into one Snakemake `wagtail` group job (`--group-components wagtail=N`, default 30). Keep modest — see note below. |
 | `--randomize` | Shuffle accessions before batching (CSV mode). |
 | `--random-seed N` | Seed for reproducible shuffling (pin this when resuming a randomized run). |
 | `--start-batch N` / `--end-batch N` | Process only an inclusive batch-number range. |
@@ -426,6 +441,8 @@ python batch_run_wagtail.py \
 | `--batch-make` | Only create batch/config files and print per-batch commands, then exit. |
 
 > When `--randomize` is used without `--random-seed`, the batching is non-reproducible — pin a seed if you intend to resume the run later, otherwise re-running will reshuffle and the script will warn that batch files changed.
+
+> **`--group-components` and `Argument list too long`.** Each Snakemake `wagtail` group job re-invokes Snakemake with one explicit target per (rule × sample) in the group, so the cluster submit command grows with the group size. Too large a group overflows the OS command-line limit and the run dies at submission with `OSError: [Errno 7] Argument list too long: '/bin/sh'` (often only on a cold run — a rerun has fewer pending samples, packs smaller groups, and slips under the limit). The default `30` leaves wide headroom. If you hit this error, lower `--group-components` (and/or `-b`); raise it only if your group jobscripts stay well under ~128 KB (`sed -n '3p' .snakemake/tmp*/snakejob.*wagtail*.sh | wc -c`).
 
 #### Code examples
 
@@ -569,7 +586,7 @@ The best hit fraction was below the confidence threshold (default 0.60). The sam
 
 4. Batch jobs fail / OOM\
    → Check cluster resource limits; the batched `marker_id` job requests ~10 GB in auto-detect mode\
-   → `Argument list too long` from the scheduler usually means an oversized batch list — Wagtail v1.2 avoids per-sample command-line expansion, so update to v1.2 and/or reduce batch size if you still hit it\
+   → `Argument list too long` at submission (`OSError: [Errno 7] … '/bin/sh'`) means a Snakemake `wagtail` **group job** packed too many samples, overflowing the cluster submit command. Lower `--group-components` (default 30) in `batch_run_wagtail.py`, and/or reduce `-b` batch size. (The pipeline's own rules no longer expand per-sample lists onto the command line in v1.2 — this limit is Snakemake's group submission, controlled by group size.)\
    → `deblur` wall-time scales automatically on retry (4 h → 8 h → 12 h); ensure `--restart-times 2` is set\
    → Reduce batch size (`-b` parameter)\
    → Check disk space in the output directory
@@ -604,11 +621,11 @@ Platform\
 :white_check_mark: HPC clusters with job schedulers\
 :white_check_mark: Local workstations
 
-Database\
-- Tested with bacterial/archaeal 16S ([MFD](https://zenodo.org/records/17162544), [GreenGenes2](https://greengenes2.ucsd.edu/)), 18S [(PR2)](https://pr2-database.org/), ITS [(UNITE)](https://unite.ut.ee/index.php#main), and CO1 [(MIDORI2)](https://www.reference-midori.info/) databases\
-- Custom databases must be in FASTA format (gzipped or plain)\
-- Filename must match the marker prefix pattern (e.g. `16S_database*`)\
-- No built-in database downloading or editing. User should procure and edit manually
+Database
+- Tested with bacterial/archaeal 16S ([MFD](https://zenodo.org/records/17162544), [GreenGenes2](https://greengenes2.ucsd.edu/)), 18S [(PR2)](https://pr2-database.org/), ITS [(UNITE)](https://unite.ut.ee/index.php#main), and CO1 [(MIDORI2)](https://www.reference-midori.info/) databases.
+- Custom databases must be in FASTA format (gzipped or plain).
+- Filename must match the marker prefix pattern (e.g. `16S_database*`).
+- No built-in database downloading or editing. User should procure and edit manually.
 
 ## Code development notice
 

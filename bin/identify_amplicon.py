@@ -72,10 +72,15 @@ def parse_args():
     p.add_argument("--min-margin",     type=float, default=0.05,
                    help="Minimum combined-score margin between best and second-best marker "
                         "for an unambiguous call (default: 0.05)")
-    p.add_argument("--min-16s-score", type=float, default=0.80,
-                   help="If the 16S combined score (hit_fraction × mean_identity) meets "
-                        "this threshold, always call 16S (overrides ranking; guards "
-                        "against 16S/18S cross-homology). Default: 0.80")
+    p.add_argument("--min-16s-score", type=float, default=0.95,
+                   help="The 16S priority rule fires only when the 16S combined score "
+                        "(hit_fraction × mean_identity) meets this threshold (guards 16S/18S "
+                        "cross-homology). Default: 0.95")
+    p.add_argument("--min-16s-identity", type=float, default=0.97,
+                   help="The 16S priority rule ALSO requires 16S mean_identity to meet this "
+                        "threshold. Genuine 16S aligns at high identity; non-16S amplicons whose "
+                        "conserved SSU flanks cross-align to 16S reach a high combined score via "
+                        "hit_fraction but at lower identity . Default: 0.97")
     return p.parse_args()
 
 # ── Data container ────────────────────────────────────────────────────────────
@@ -232,6 +237,7 @@ def identify_marker(
     min_confidence:   float,
     min_margin:       float,
     min_16s_score:    float,
+    min_16s_identity: float = 0.0,
 ) -> tuple[str, str, AlignmentStats, AlignmentStats | None]:
     """
     Primary metric:   combined score = hit_fraction × mean_identity
@@ -243,10 +249,12 @@ def identify_marker(
     identity): a marker that aligns 60 % of reads at 94.8 % identity scores
     0.569, clearly beating one that aligns only 13 % at 96.5 % (0.126).
 
-    Priority rule: if the 16S combined score (hit_fraction × mean_identity)
-    >= min_16s_score, call 16S unconditionally.  16S and 18S share enough
-    SSU homology that 16S reads routinely align to 18S at nearly identical
-    identity; a strong 16S combined score is a more reliable discriminator.
+    Priority rule: call 16S unconditionally when the 16S combined score
+    (hit_fraction × mean_identity) >= min_16s_score AND 16S mean_identity
+    >= min_16s_identity.  16S and 18S share enough SSU homology that 16S reads
+    routinely align to 18S at nearly identical identity, so a strong 16S signal
+    should win. Requiring high mean_identity rejects those cross-reactive
+    hits while preserving the 16S-vs-18S tie-break.
 
     Returns: (status, predicted_marker, best_stats, second_stats)
       status: "OK" | "AMBIGUOUS" | "UNKNOWN"
@@ -260,14 +268,16 @@ def identify_marker(
     best   = ranked[0]
     second = ranked[1] if len(ranked) > 1 else None
 
-    # ── 16S priority rule ────────────────────────────────────────────────────
+    # ── 16S priority rule (combined-score AND mean-identity gates) ────────────
     sixteen_s = stats.get("16S")
-    if sixteen_s and (sixteen_s.hit_fraction * sixteen_s.mean_identity) >= min_16s_score:
+    if (sixteen_s
+            and (sixteen_s.hit_fraction * sixteen_s.mean_identity) >= min_16s_score
+            and sixteen_s.mean_identity >= min_16s_identity):
         sixteen_s_score = sixteen_s.hit_fraction * sixteen_s.mean_identity
         non_16s = next((s for s in ranked if s.marker != "16S"), None)
         logging.info(
-            f"  16S priority rule triggered: "
-            f"16S combined_score={sixteen_s_score:.4f} >= {min_16s_score}"
+            f"  16S priority rule triggered: combined_score={sixteen_s_score:.4f} "
+            f">= {min_16s_score} and mean_identity={sixteen_s.mean_identity:.4f} >= {min_16s_identity}"
         )
         return "OK", "16S", sixteen_s, non_16s
 
@@ -352,8 +362,8 @@ def run_single(args) -> int:
         return 1
     logging.info(f"  → {len(reads)} reads loaded")
 
-    # 2. Align against each database (16S first so the early-exit can fire
-    #    before the larger CO1/18S indices are loaded).
+    # 2. Align against every database (all four, so the identity-gated 16S
+    #    priority rule has each marker's stats to compare).
     databases = [
         ("16S", args.db_16S),
         ("ITS", args.db_ITS),
@@ -373,15 +383,11 @@ def run_single(args) -> int:
             f"({result.hit_fraction:.3f})  mean_id={result.mean_identity:.4f}  "
             f"median_id={result.median_identity:.4f}"
         )
-        if marker == "16S" and (result.hit_fraction * result.mean_identity) >= args.min_16s_score:
-            score = result.hit_fraction * result.mean_identity
-            logging.info(f"  16S combined score {score:.4f} >= {args.min_16s_score} "
-                         f"— skipping remaining databases")
-            break
 
     # 3. Identify + log + write
     status, predicted, best, second = identify_marker(
-        stats, args.min_confidence, args.min_margin, args.min_16s_score
+        stats, args.min_confidence, args.min_margin,
+        args.min_16s_score, args.min_16s_identity,
     )
     _log_decision(status, predicted, best, second, args)
     write_marker_file(args.output, status, predicted, best, second)
@@ -451,10 +457,7 @@ def run_batch(args) -> int:
         sample_reads[s] = reads
     logging.info(f"  Subsampled OK: {len(sample_reads)}  |  failed: {len(failed)}")
 
-    # 2. Align against each database, loading each index exactly once.
-    #    Samples that trigger the 16S priority rule are 'resolved' and skip the
-    #    remaining (larger) databases — and if every sample resolves on 16S,
-    #    ITS/18S/CO1 are never even loaded.
+    # 2. Align EVERY sample against EVERY database, loading each index exactly once.
     databases = [
         ("16S", args.db_16S),
         ("ITS", args.db_ITS),
@@ -462,41 +465,32 @@ def run_batch(args) -> int:
         ("CO1", args.db_CO1),
     ]
     sample_stats: dict[str, dict[str, AlignmentStats]] = {s: {} for s in sample_reads}
-    resolved: set[str] = set()
 
     for marker, db_path in databases:
-        todo = (list(sample_reads.keys()) if marker == "16S"
-                else [s for s in sample_reads if s not in resolved])
-        if not todo:
-            logging.info(f"All samples resolved before {marker}; skipping its index load.")
-            continue
-
-        logging.info(f"Loading {marker} index ({db_path}) — aligning {len(todo)} sample(s)")
+        logging.info(f"Loading {marker} index ({db_path}) — aligning {len(sample_reads)} sample(s)")
         aligner = build_aligner(db_path, marker, args.preset, args.minimizer_w)
         if aligner is None:
-            for s in todo:
+            for s in sample_reads:
                 sample_stats[s][marker] = make_empty(marker, len(sample_reads[s]))
             continue
 
-        for n, s in enumerate(todo, 1):
-            st = align_reads(sample_reads[s], aligner, marker,
-                             args.min_identity, args.min_aln_length)
-            sample_stats[s][marker] = st
-            if marker == "16S" and (st.hit_fraction * st.mean_identity) >= args.min_16s_score:
-                resolved.add(s)
+        for n, s in enumerate(sample_reads, 1):
+            sample_stats[s][marker] = align_reads(
+                sample_reads[s], aligner, marker, args.min_identity, args.min_aln_length)
             if n % 500 == 0:
-                logging.info(f"    {marker}: {n}/{len(todo)} aligned")
+                logging.info(f"    {marker}: {n}/{len(sample_reads)} aligned")
 
-        # Free this index before the next (possibly larger) one loads.
+        # Free this index before the next one loads.
         del aligner
         gc.collect()
-        logging.info(f"  {marker} done — resolved so far: {len(resolved)}/{len(sample_reads)}")
+        logging.info(f"  {marker} done")
 
     # 3. Decide and write one .marker per sample.
     counts: dict[str, int] = {}
     for s in sample_reads:
         status, predicted, best, second = identify_marker(
-            sample_stats[s], args.min_confidence, args.min_margin, args.min_16s_score
+            sample_stats[s], args.min_confidence, args.min_margin,
+            args.min_16s_score, args.min_16s_identity,
         )
         write_marker_file(out_dir / f"{s}_marker.json", status, predicted, best, second)
         counts[status] = counts.get(status, 0) + 1

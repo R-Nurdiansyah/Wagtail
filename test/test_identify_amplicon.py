@@ -177,9 +177,9 @@ class TestIdentifyMarker(unittest.TestCase):
     MARGIN = 0.05   # min_margin
     FRAC   = 0.90   # min_16s_score (16S combined-score threshold: hit_fraction × mean_identity)
 
-    def _call(self, stats_list, conf=CONF, margin=MARGIN, frac=FRAC):
+    def _call(self, stats_list, conf=CONF, margin=MARGIN, frac=FRAC, idn=0.0):
         stats = {s.marker: s for s in stats_list}
-        return identify_marker(stats, conf, margin, frac)
+        return identify_marker(stats, conf, margin, frac, idn)
 
     # ── 16S priority rule ─────────────────────────────────────────────────────
 
@@ -238,6 +238,38 @@ class TestIdentifyMarker(unittest.TestCase):
         _, _, _, second = self._call(stats)
         self.assertIsNotNone(second)
         self.assertEqual(second.marker, "18S")   # highest non-16S by combined score
+
+    # ── 16S priority mean-identity gate ───────────────────────────────────────
+
+    def test_16s_priority_blocked_by_low_mean_identity(self):
+        """Cross-reactive non-16S (e.g. ITS whose conserved SSU flanks hit 16S):
+        16S reaches the combined-score threshold via high hit_fraction but at LOW
+        identity, so the identity gate must block the priority rule and let the
+        true marker win. 16S combined 0.99×0.94=0.9306 ≥ frac(0.90) would fire
+        WITHOUT the gate; idn=0.97 > 0.94 blocks it → ITS (higher combined) wins."""
+        stats = [
+            _make_stats("16S", hit_fraction=0.99, mean_identity=0.94),   # combined 0.9306
+            _make_stats("ITS", hit_fraction=1.00, mean_identity=0.99),   # combined 0.9900
+            _make_stats("18S", hit_fraction=0.00, mean_identity=0.0),
+            _make_stats("CO1", hit_fraction=0.00, mean_identity=0.0),
+        ]
+        status, predicted, best, _ = self._call(stats, frac=0.90, idn=0.97)
+        self.assertEqual(predicted, "ITS")
+        self.assertEqual(best.marker, "ITS")
+        self.assertEqual(status, "OK")   # margin 0.0594 ≥ min_margin
+
+    def test_16s_priority_fires_with_high_mean_identity(self):
+        """Genuine 16S: high identity passes the gate, so the priority rule still
+        rescues 16S even when 18S has a marginally higher combined score."""
+        stats = [
+            _make_stats("16S", hit_fraction=0.99, mean_identity=0.99),    # combined 0.9801
+            _make_stats("18S", hit_fraction=1.00, mean_identity=0.985),   # combined 0.9850 (higher)
+            _make_stats("ITS", hit_fraction=0.00, mean_identity=0.0),
+            _make_stats("CO1", hit_fraction=0.00, mean_identity=0.0),
+        ]
+        status, predicted, _, _ = self._call(stats, frac=0.90, idn=0.97)
+        self.assertEqual(status, "OK")
+        self.assertEqual(predicted, "16S")
 
     # ── UNKNOWN gate ──────────────────────────────────────────────────────────
 

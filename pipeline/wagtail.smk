@@ -150,10 +150,12 @@ rule marker_id:
         filemap     = config["file_map"],
         sample_list = filename_list,
     output:
-        sentinel = marker_done
+        sentinel = marker_done,
+        summary  = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_marker_summary.tsv"
     params:
         script          = f"{script_dir}/identify_amplicon.py",
         forced_script   = f"{script_dir}/write_forced_markers.py",
+        summary_script  = f"{script_dir}/marker_summary.py",
         marker_dir      = f"{run_dir}/{run_name}/1_marker_id",
         db_16S          = DB_16S,
         db_18S          = DB_18S,
@@ -177,7 +179,7 @@ rule marker_id:
         runtime = "1h" if not AUTO_DETECT else "47h"
     shell:
         r"""
-        mkdir -p {params.marker_dir} $(dirname {log})
+        mkdir -p {params.marker_dir} $(dirname {log}) $(dirname {output.summary})
 
         # ── Forced-amplicon fast path ─────────────────────────────────────────
         # No alignment needed — write a trivial OK marker JSON for every sample.
@@ -187,6 +189,13 @@ rule marker_id:
                 --output-dir  {params.marker_dir} \
                 --marker      {params.forced_amplicon} \
                 &> {log}
+            # Summary: every sample reported FORCED/<marker>.
+            python {params.summary_script} \
+                --marker-dir  {params.marker_dir} \
+                --sample-list {input.sample_list} \
+                --output      {output.summary} \
+                --forced      {params.forced_amplicon} \
+                &>> {log}
             touch {output.sentinel}
             exit 0
         fi
@@ -202,6 +211,12 @@ rule marker_id:
             --minimizer-w {params.minimizer_w} \
             --output-dir {params.marker_dir} \
             &> {log}
+        # Summary: OK/<marker> for confident calls, FAIL/UNKNOWN otherwise.
+        python {params.summary_script} \
+            --marker-dir  {params.marker_dir} \
+            --sample-list {input.sample_list} \
+            --output      {output.summary} \
+            &>> {log}
         touch {output.sentinel}
         """
 

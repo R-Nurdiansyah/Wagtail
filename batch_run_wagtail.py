@@ -56,6 +56,7 @@ class Config:
     execution_mode: str
     amplicon: str
     conda_prefix: str
+    group_components: int
     randomize: bool
     random_seed: int
     start_batch: int
@@ -110,6 +111,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--conda-prefix", default=None,
                         help="Path to the shared conda environment prefix directory "
                              "(passed to Snakemake as --conda-prefix).")
+    parser.add_argument("--group-components", type=int, default=30,
+                        help="Max per-sample chains merged into one Snakemake 'wagtail' group job "
+                             "(--group-components wagtail=N, default 30). Keep this modest: each "
+                             "group job re-invokes Snakemake with an explicit target per (rule x "
+                             "sample), and a too-large group overflows the cluster submit command "
+                             "(OSError: Argument list too long). ~30 leaves wide headroom; raise "
+                             "only if submissions stay well under ~128 KB.")
     parser.add_argument("--batch-make", action="store_true",
                         help="Only create batch sample files and config files, then exit. "
                              "Does not run the pipeline. Requires -a (CSV mode) and -r. "
@@ -147,6 +155,8 @@ def config_from_args(args, parser) -> Config:
         parser.error(f"Input directory not found: {args.input_dir}")
     if not os.path.exists(args.file_map):
         parser.error(f"File map not found: {args.file_map}")
+    if args.group_components < 1:
+        parser.error("--group-components must be >= 1.")
 
     return Config(
         input_mode=input_mode,
@@ -166,6 +176,7 @@ def config_from_args(args, parser) -> Config:
         execution_mode=args.execution_mode,
         amplicon=args.amplicon,
         conda_prefix=args.conda_prefix,
+        group_components=args.group_components,
         randomize=args.randomize,
         random_seed=args.random_seed,
         start_batch=args.start_batch,
@@ -364,7 +375,7 @@ def run_batch(cfg: Config, batch_num: int, batch_data: dict):
             "--jobs", "50",
             "--local-cores", str(cfg.request_cores),
             "--cores", str(cfg.request_cores * 4),
-            "--group-components", "wagtail=160",
+            "--group-components", f"wagtail={cfg.group_components}",
         ]
         with open(status_file, "w") as sf:
             sf.write("STARTED\n")
@@ -394,7 +405,7 @@ def run_batch(cfg: Config, batch_num: int, batch_data: dict):
             "--jobs", "50",
             "--local-cores", str(cfg.request_cores),
             "--cores", str(cfg.request_cores * 4),
-            "--group-components", "wagtail=50",
+            "--group-components", f"wagtail={cfg.group_components}",
             "--retries", "3",
         ]
         cmd = [
@@ -583,6 +594,7 @@ def log_run_header(cfg: Config) -> None:
         lines.append(f"Input directory: {cfg.input_dir}")
     lines.append(f"Output directory: {cfg.output_dir}")
     lines.append(f"Pipeline: {cfg.pipeline}")
+    lines.append(f"Group components: wagtail={cfg.group_components}")
     if cfg.execution_mode == "cluster":
         lines.append(f"Cluster resources: {cfg.request_cores} cores, {cfg.request_mem}GB RAM, {cfg.request_hours}h")
     with _LOG_LOCK:
