@@ -14,10 +14,14 @@
 #     sentinel gate) and records OK/FAIL into SQLite under rule_name "marker_id"
 #     (manifest's upstream check is unchanged). Grouped with "wagtail".
 #   - manifest depends on 1_marker_logged/{sample}.logged instead of the JSON.
-#   - cleanup no longer expands per-sample file lists onto the command line:
-#     sql_merge.py globs the 0_tmp dir and metadata is gathered with `find`
-#     (also ARG_MAX-safe at scale). Supports optional result/intermediate/all
-#     archiving via wagtail.py --archive-* flags.
+#   - the all-samples fan-in is collapsed by a `localrule gather_data` into one
+#     `all_samples.done` sentinel; cleanup depends on that single file, not the
+#     ~10k per-sample outputs. This keeps cleanup's cluster submission under
+#     ARG_MAX (a submitted job depending on every sample builds a per-input
+#     dependency string that overflows /bin/sh). cleanup's shell also avoids
+#     command-line file lists: sql_merge.py globs 0_tmp and metadata is gathered
+#     with `find`. Supports optional result/intermediate/all archiving via
+#     wagtail.py --archive-* flags.
 # Changes from v0.15 (carried over from v1.1):
 #   - qiime2_import + quality_control merged into import_and_qc
 #   - export_seqs + export_and_edit_table merged into export_all
@@ -851,18 +855,29 @@ rule metadata_creation:
         exit 0
         """
 
-# ── cleanup ───────────────────────────────────────────────────────────────────
-rule cleanup:
-    group: "cleanup"
+# ── gather_data ───────────────────────────────────────────────────────────────
+# Wide fan-in over every sample's two final per-sample outputs, collapsed into a single `all_samples.done` sentinel.
+# `localrule` so it runs inside the Snakemake controller.
+rule gather_data:
+    localrule: True
     input:
         metadata  = expand(f"{run_dir}/{run_name}/7_metadata/{{filename}}/{{filename}}_metadata.tsv", filename=filenames),
         community = expand(f"{run_dir}/{run_name}/6_condensed_wagtail/{{filename}}_condensed.tsv",    filename=filenames)
     output:
+        gathered = f"{run_dir}/{run_name}/0_logs_wagtail/all_samples.done"
+    shell:
+        "mkdir -p $(dirname {output.gathered}) && touch {output.gathered}"
+
+# ── cleanup ───────────────────────────────────────────────────────────────────
+rule cleanup:
+    group: "cleanup"
+    input:
+        # Gate on gather_data's single sentinel — NOT the per-sample file lists
+        gathered = f"{run_dir}/{run_name}/0_logs_wagtail/all_samples.done"
+    output:
         merged        = sql_log,
         cleanup_done  = f"{run_dir}/{run_name}/0_logs_wagtail/cleanup_done.txt",
         full_metadata = f"{run_dir}/{run_name}/7_metadata/{run_name}_full_metadata.tsv"
-    wildcard_constraints:
-        filename = r"[^\.]+"
     params:
         merge_script   = f"{script_dir}/sql_merge.py",
         target         = lambda w, output: str(Path(output.merged).parent.parent),
@@ -884,26 +899,23 @@ rule cleanup:
         runtime = "2h"
     shell:
         r"""
-        # NOTE: at 5k+ samples the per-sample file lists must NOT be expanded onto
-        # a command line (ARG_MAX → "Argument list too long"). sql_merge.py is given
-        # the 0_tmp directory to glob, and metadata is gathered with `find`; only
-        # single representative inputs ([0]) are referenced directly.
 
         # Step 1: Merge per-sample SQLite logs (script globs 0_tmp/*_log.sql)
-        touch {input.metadata[0]} {input.community[0]}
         python {params.merge_script} {output.merged} {params.tmpdir} &> {log.merger}
         sleep 2
 
-        # Step 2: Merge per-sample metadata into one file (a final result, so it
-        #         must exist before any --archive-result / --archive-all zip).
-        #         Header from the first sample; bodies gathered via find so the
-        #         path list never hits the command line. -mindepth 2 skips the
-        #         top-level <run>_full_metadata.tsv we are writing here.
-        (head -n 1 {input.metadata[0]} > {output.full_metadata} \
-            && find {params.metadata_dir} -mindepth 2 -name '*_metadata.tsv' -type f \
-                | sort | while IFS= read -r f; do tail -n +2 -q "$f"; done \
-                >> {output.full_metadata}) \
-            &> {log.full_metadata}
+        # Step 2: Merge per-sample metadata into one file 
+        (
+            first_meta=$(find {params.metadata_dir} -mindepth 2 -name '*_metadata.tsv' -type f | sort | head -n 1)
+            if [[ -n "$first_meta" ]]; then
+                head -n 1 "$first_meta" > {output.full_metadata}
+                find {params.metadata_dir} -mindepth 2 -name '*_metadata.tsv' -type f \
+                    | sort | while IFS= read -r f; do tail -n +2 -q "$f"; done \
+                    >> {output.full_metadata}
+            else
+                : > {output.full_metadata}
+            fi
+        ) &> {log.full_metadata}
 
         # Step 3: Drop the scratch dir, then (optionally) archive. 0_tmp is
         #         removed first so it never lands in a 0_ archive; the 1-5
