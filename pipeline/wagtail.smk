@@ -16,17 +16,8 @@
 #   - manifest depends on 1_marker_logged/{sample}.logged instead of the JSON.
 #   - the all-samples fan-in is collapsed by a `localrule gather_data` into one
 #     `all_samples.done` sentinel; cleanup depends on that single file, not the
-#     ~10k per-sample outputs. This keeps cleanup's cluster submission under
-#     ARG_MAX (a submitted job depending on every sample builds a per-input
-#     dependency string that overflows /bin/sh). cleanup's shell also avoids
-#     command-line file lists: sql_merge.py globs 0_tmp and metadata is gathered
-#     with `find`. Supports optional result/intermediate/all archiving via
+#     per-sample outputs. Supports optional result/intermediate/all archiving via
 #     wagtail.py --archive-* flags.
-# Changes from v0.15 (carried over from v1.1):
-#   - qiime2_import + quality_control merged into import_and_qc
-#   - export_seqs + export_and_edit_table merged into export_all
-#   - _resolve() @lru_cache for identification databases
-#   - deblur runtime dynamic on retry
 
 import os
 import glob
@@ -904,9 +895,14 @@ rule cleanup:
         python {params.merge_script} {output.merged} {params.tmpdir} &> {log.merger}
         sleep 2
 
-        # Step 2: Merge per-sample metadata into one file 
+        # Step 2: Merge per-sample metadata into one file.
+        #   Header: from the first file via `find -print -quit` (NOT `find | sort |
+        #   head`, which SIGPIPEs `sort` under `set -o pipefail` once its output
+        #   exceeds the pipe buffer at large sample counts → silent cleanup failure).
+        #   Bodies: `find | sort | while read` drains every line (no early pipe
+        #   close → SIGPIPE-safe) and keeps no path list on a command line.
         (
-            first_meta=$(find {params.metadata_dir} -mindepth 2 -name '*_metadata.tsv' -type f | sort | head -n 1)
+            first_meta=$(find {params.metadata_dir} -mindepth 2 -name '*_metadata.tsv' -type f -print -quit)
             if [[ -n "$first_meta" ]]; then
                 head -n 1 "$first_meta" > {output.full_metadata}
                 find {params.metadata_dir} -mindepth 2 -name '*_metadata.tsv' -type f \

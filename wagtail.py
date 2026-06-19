@@ -17,6 +17,11 @@ Run for a single amplicon only (16S, 18S, ITS, or CO1):
 Use GreenGenes2 database variant:
     python wagtail.py --gg2 --use-conda -c 8 --configfile pipeline/config.yaml
 
+Resume from intermediate results (runs the second half: mappy → end) using
+pipeline/wagtail_resume.smk — see that file's header for the required inputs:
+    python wagtail.py --resume --use-conda -c 8 --configfile pipeline/config.yaml
+    python wagtail.py --resume --amplicon ITS --use-conda -c 8 ...   # regenerate markers
+
 Archive run outputs during cleanup (any combination):
     # final results only (0_/6_/7_) → <run>_final_results.zip
     python wagtail.py --archive-result --use-conda -c 8 --configfile pipeline/config.yaml
@@ -53,9 +58,10 @@ from typing import NoReturn
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DB_DIR   = os.path.join(BASE_DIR, "database")
 SMK_DIR  = os.path.join(BASE_DIR, "pipeline")
-SMK_FILE = os.path.join(SMK_DIR, "wagtail.smk")
-SMK_GG2  = os.path.join(SMK_DIR, "wagtail_gg2.smk")
-BIN_DIR  = os.path.join(BASE_DIR, "bin")
+SMK_FILE   = os.path.join(SMK_DIR, "wagtail.smk")
+SMK_GG2    = os.path.join(SMK_DIR, "wagtail_gg2.smk")
+SMK_RESUME = os.path.join(SMK_DIR, "wagtail_resume.smk")
+BIN_DIR    = os.path.join(BASE_DIR, "bin")
 
 VERSION = "1.2"
 
@@ -160,6 +166,7 @@ class Options:
     check_db: bool
     list_db: bool
     use_gg2: bool
+    use_resume: bool                  # run the resume pipeline (second half)
     archive_result: bool
     archive_all: bool
     archive_intermediate: str | None  # None | 'all' | '1,3,5'
@@ -200,6 +207,7 @@ def parse_options(argv: list[str]) -> Options:
         check_db             = bool(_pop_flag(args, "--check-db")),
         list_db              = bool(_pop_flag(args, "--list-db")),
         use_gg2              = _pop_any_flag(args, _GG2_ALIASES),
+        use_resume           = bool(_pop_flag(args, "--resume")),
         archive_result       = bool(_pop_flag(args, "--archive-result")),
         archive_all          = bool(_pop_flag(args, "--archive-all")),
         archive_intermediate = _pop_archive_intermediate(args),
@@ -345,11 +353,19 @@ def _check_taxonomy_formats(taxonomy_ok: list[str]) -> list[str]:
 
 # ── pipeline runner ───────────────────────────────────────────────────────────
 
-def run_pipeline(snakemake_args: list[str], use_gg2: bool = False) -> None:
+def _select_snakefile(use_gg2: bool, use_resume: bool) -> str:
+    """Pick the Snakefile for this run. --resume takes precedence over --gg2."""
+    if use_resume:
+        return SMK_RESUME
+    return SMK_GG2 if use_gg2 else SMK_FILE
+
+
+def run_pipeline(snakemake_args: list[str], use_gg2: bool = False,
+                 use_resume: bool = False) -> None:
     """Invoke the Snakemake CLI in-process with the chosen Snakefile."""
     args = list(snakemake_args)
     if not any(a in ("-s", "--snakefile") for a in args):
-        smk = SMK_GG2 if use_gg2 else SMK_FILE
+        smk = _select_snakefile(use_gg2, use_resume)
         if not os.path.isfile(smk):
             _die(f"Snakefile not found: {smk}")
         args = ["-s", smk] + args
@@ -383,7 +399,8 @@ def main(argv: list[str] | None = None) -> int:
         return list_databases(opts.db_dir, opts.active_markers)
 
     # Forward to Snakemake, injecting the config overrides built from our flags.
-    run_pipeline(opts.snakemake_args + opts.config_overrides(), use_gg2=opts.use_gg2)
+    run_pipeline(opts.snakemake_args + opts.config_overrides(),
+                 use_gg2=opts.use_gg2, use_resume=opts.use_resume)
     return 0
 
 
