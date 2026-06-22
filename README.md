@@ -213,7 +213,7 @@ run/run_name/
 │   ├── {sample}/
 │   │   └── {sample}_metadata.tsv
 │   └── {run_name}_full_metadata.tsv   # Combined metadata for all samples
-└── {run_name}_YYYYMMDD_log.sql        # SQLite execution log
+└── {run_name}_log.sql                 # SQLite execution log
 ```
 
 Intermediate directories (`1_marker_id/` through `5_taxonomy_wagtail/`) are cleaned up after the pipeline completes — unless you archive them first with `--archive-intermediate` / `--archive-all` (see [Archiving results](#archiving-results)). The intermediate QIIME2 import artifact (previously `1_import_wagtail/`) is written to per-sample scratch space (`TMPDIR`) and is never materialised on shared storage.
@@ -222,7 +222,7 @@ Intermediate directories (`1_marker_id/` through `5_taxonomy_wagtail/`) are clea
 - `{sample}_condensed.tsv` — taxonomic profile with abundances for one sample
 - `{run_name}_full_metadata.tsv` — combined metadata for all samples in the run
 - `{run_name}_marker_summary.tsv` — sample → status → amplicon table from marker identification
-- `{run_name}_YYYYMMDD_log.sql` — SQLite database with per-sample execution status for every pipeline step
+- `{run_name}_log.sql` — SQLite database with per-sample execution status for every pipeline step
 
 ### Executing Wagtail
 
@@ -481,11 +481,11 @@ python batch_run_wagtail.py \
 ### Execution result and logs
 
 After successful execution, all results will be saved in `run/run_name/`. It will contain several directories:
-1. `0_logs_wagtail/` — execution logs and benchmarks for each step; the merged SQLite database (`run_name_YYYYMMDD_log.sql`) records the status of every sample at every step
+1. `0_logs_wagtail/` — execution logs and benchmarks for each step; the merged SQLite database (`run_name_log.sql`) records the status of every sample at every step
 2. `6_condensed_wagtail/` — taxonomy profile for each sample
 3. `7_metadata/` — running metadata for each sample and a combined metadata file for all samples
 
-Should the pipeline execution result in errors, the SQLite log at `0_logs_wagtail/run_name_YYYYMMDD_log.sql` records exactly which sample failed at which step. The affected sample's downstream steps are skipped while all other samples continue normally.
+Should the pipeline execution result in errors, the SQLite log at `0_logs_wagtail/run_name_log.sql` records exactly which sample failed at which step. The affected sample's downstream steps are skipped while all other samples continue normally.
 
 ### Database management
 

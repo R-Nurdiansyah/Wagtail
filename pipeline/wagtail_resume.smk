@@ -30,7 +30,6 @@
 
 import os
 from pathlib import Path
-from datetime import datetime
 
 # ── Directories ──────────────────────────────────────────────────────────────
 parent_dir = os.path.dirname(workflow.basedir)
@@ -74,9 +73,12 @@ def _archive_cli() -> str:
         parts.append(f"--archive-intermediate {ARCHIVE_INTERMEDIATE}")
     return " ".join(parts)
 
-# ── Timestamp / SQLite / paths ───────────────────────────────────────────────
-timestamp = datetime.now().strftime("%Y%m%d")
-sql_log   = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{timestamp}_log.sql"
+# ── SQLite / paths ───────────────────────────────────────────────────────────
+# DETERMINISTIC log name (no datetime.now()): the cluster-generic executor
+# re-parses this .smk in every remote job, so a now()-based timestamp would
+# differ between the controller and a job that runs on a later day, breaking
+# cleanup's output check on multi-day runs (see main pipeline note).
+sql_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_log.sql"
 
 def tmp_db(filename):  return f"{run_dir}/{run_name}/0_tmp/{filename}_log.sql"
 def tmp_dir(filename): return f"{run_dir}/{run_name}/0_tmp/{filename}"

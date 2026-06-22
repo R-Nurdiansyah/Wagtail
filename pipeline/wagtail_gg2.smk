@@ -5,7 +5,6 @@
 # =============================================================================
 
 import os
-from datetime import datetime
 
 # -----------------------------------------------------------------------------
 # Directory layout
@@ -23,13 +22,14 @@ configfile: "config.yaml"
 
 run_name      = config["run_name"]
 filenames     = [l.strip() for l in open(config["sample_list"])]
-timestamp     = datetime.now().strftime("%Y%m%d")
 
 # Derived paths used in multiple rules
 RUN           = f"{run_dir}/{run_name}"
 TMP_ROOT      = f"{RUN}/0_tmp"
 LOG_ROOT      = f"{RUN}/0_logs_wagtail"
-sqlite_db_path = f"{LOG_ROOT}/{run_name}_{timestamp}_log.sql"
+# Deterministic name (no datetime.now(): remote jobs re-parse the .smk on
+# possibly-later days, which would break the controller's output check).
+sqlite_db_path = f"{LOG_ROOT}/{run_name}_log.sql"
 
 # -----------------------------------------------------------------------------
 # Scripts & environments

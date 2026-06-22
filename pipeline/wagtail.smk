@@ -25,7 +25,6 @@ import csv
 import json
 from functools import lru_cache
 from pathlib import Path
-from datetime import datetime
 
 # ── Directories ──────────────────────────────────────────────────────────────
 parent_dir = os.path.dirname(workflow.basedir)
@@ -76,12 +75,15 @@ def _archive_cli() -> str:
     return " ".join(parts)
 
 # ── Timestamp / SQLite ───────────────────────────────────────────────────
-def make_timestamp():
-    fmt = "%Y%m%d"
-    return datetime.now().strftime(fmt)
-
-timestamp = make_timestamp()
-sql_log   = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_{timestamp}_log.sql"
+# DETERMINISTIC name — must NOT depend on datetime.now(). The cluster-generic
+# executor re-parses this .smk inside every remote job, so a now()-based
+# timestamp differs between the controller's parse and a job that runs on a
+# later day. On a multi-day run the cleanup job would write
+# {run_name}_<jobdate>_log.sql while the controller expects
+# {run_name}_<controllerdate>_log.sql → MissingOutputException (and cleanup,
+# having already deleted intermediates / archived, is falsely marked failed).
+# {run_name} is unique per batch; the file's own mtime carries the date.
+sql_log = f"{run_dir}/{run_name}/0_logs_wagtail/{run_name}_log.sql"
 
 # ── Shared path helpers (called from params) ──────────────────────────────────
 def log_dir(filename):
