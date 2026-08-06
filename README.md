@@ -1,8 +1,9 @@
 ![Wagtail Logo](https://github.com/R-Nurdiansyah/Wagtail/blob/development/wagtail_logo_(29-7-2024).png?raw=true)
 
 # Wagtail
-_Version 1.2_
-[![DOI](https://zenodo.org/badge/678239419.svg)](https://doi.org/10.5281/zenodo.19547170)
+_Version 1.2.0_
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19547170.svg)](https://doi.org/10.5281/zenodo.19547170)
+[![Databases](https://img.shields.io/badge/databases-10.5281%2Fzenodo.21817761-blue)](https://doi.org/10.5281/zenodo.21817761)
 
 Wagtail is an accurate and scalable tool to analyze amplicon sequencing datasets with easy-to-swap reference databases. As of version 1.2, Wagtail supports **16S, 18S, ITS, and CO1** amplicon sequences sequenced from the Illumina platform.\
 The tool is a combination of Qiime 2 [Deblur](https://library.qiime2.org/plugins/qiime2/q2-deblur/overview) plugin for quality control and [Minimap2](https://github.com/lh3/minimap2) aligner to align representative sequences from Deblur. The result is a taxonomy profile in the format of condensed and running metadata. The combination is weaved using [Snakemake](https://snakemake.github.io/) to allow easy reproducibility, benchmarking, and packaging.\
@@ -59,7 +60,12 @@ Wagtail v1.2 requires marker-specific databases placed in the `database/` direct
 | ITS | `ITS_taxonomy*` | `ITS_taxonomy_sh_refs.fasta.gz` |
 | CO1 | `CO1_taxonomy*` | `CO1_taxonomy_MIDORI2.fasta.gz` |
 
+> [!IMPORTANT]
 > Each pattern must match **exactly one file** in the `database/` directory.
+
+> [!TIP]
+> Pre-edited databases tested with Wagtail 1.2.0 are archived at
+> [10.5281/zenodo.21817761](https://doi.org/10.5281/zenodo.21817761).
 
 #### Taxonomy file format
 
