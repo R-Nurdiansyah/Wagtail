@@ -1,7 +1,7 @@
 ![Wagtail Logo](https://github.com/R-Nurdiansyah/Wagtail/blob/development/wagtail_logo_(29-7-2024).png?raw=true)
 
 # Wagtail
-_Version 1.2.0_
+_Version 1.2.1_
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.19547170.svg)](https://doi.org/10.5281/zenodo.19547170)
 [![Databases](https://img.shields.io/badge/databases-10.5281%2Fzenodo.21817761-blue)](https://doi.org/10.5281/zenodo.21817761)
 
@@ -51,7 +51,7 @@ Wagtail v1.2 requires marker-specific databases placed in the `database/` direct
 | ITS | `ITS_deblur*` | `ITS_deblur_sh_refs.fasta.gz` |
 | CO1 | `CO1_deblur*` | `CO1_deblur_MIDORI2.fasta.gz` |
 
-**Taxonomy databases** (used during alignment — one per marker):
+**Taxonomy databases** (used to assign taxonomic labels — one per marker):
 
 | Marker | Filename pattern | Example |
 |--------|-----------------|---------|
@@ -62,10 +62,13 @@ Wagtail v1.2 requires marker-specific databases placed in the `database/` direct
 
 > [!IMPORTANT]
 > Each pattern must match **exactly one file** in the `database/` directory.
+> Feature IDs must match those in the corresponding `(marker)_database*` file.
 
 > [!TIP]
 > Pre-edited databases tested with Wagtail 1.2.0 are archived at
 > [10.5281/zenodo.21817761](https://doi.org/10.5281/zenodo.21817761).
+> To check and adapt your own database, see
+> [`edit_db_wagtail.ipynb`](edit_db_wagtail.ipynb).
 
 #### Taxonomy file format
 
